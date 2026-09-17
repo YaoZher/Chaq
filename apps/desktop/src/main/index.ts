@@ -244,9 +244,11 @@ function registerIpc(): void {
     assertMainWindowIpcSender(event);
     rememberedSessionVault.delete(accountId);
   });
-  ipcMain.handle("auth:broadcast-logout", () => {
+  ipcMain.handle("auth:broadcast-logout", (event) => {
     for (const window of BrowserWindow.getAllWindows()) {
-      if (!window.isDestroyed()) window.webContents.send("auth:logged-out");
+      // The sender already cleared its session synchronously. Echoing its old
+      // logout could cancel a new login started while the IPC was in flight.
+      if (!window.isDestroyed() && window.webContents.id !== event.sender.id) window.webContents.send("auth:logged-out");
     }
   });
   ipcMain.handle("window:set-mode", (_event, mode: "login" | "main") => {

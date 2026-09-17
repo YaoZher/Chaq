@@ -68,7 +68,7 @@ import type {
   WalletSummary,
   UserModelConfigPublic
 } from "@chaq/shared";
-import { api, ApiError, connectRealtime, type LoginUser, type UserSettings } from "./lib/api";
+import { api as remoteApi, connectRealtime, type LoginUser, type UserSettings } from "./lib/api";
 import { heuristicDraftFromMessages, parseImport } from "./lib/importParser";
 import { LatestRequestGate, isSupersededRequest } from "./lib/latest-request";
 import { PendingMessageKey } from "./lib/message-idempotency";
@@ -78,6 +78,7 @@ import { AgentWorkspace } from "./components/agent-workspace";
 import coverUrl from "./assets/chaq-cover-v2.png";
 import defaultAvatarUrl from "./assets/chaq-default-avatar-v2.png";
 import loginBgUrl from "./assets/chaq-login-bg-v2.png";
+import { useSession, type SessionState } from "./lib/use-session";
 import { ModelForm, AdminProviderForm } from "./components/model-forms";
 import { FormField, FieldError } from "./components/form-field";
 import {
@@ -105,18 +106,6 @@ type NoticeToastState = {
   message: string;
   tone: NoticeTone;
   visible: boolean;
-};
-
-type RememberedAccount = {
-  expiresAt: string;
-  user: LoginUser;
-  settings: UserSettings;
-};
-
-type LegacyRememberedSession = {
-  accountId: string;
-  sessionToken: string;
-  expiresAt: string;
 };
 
 const blankSkill: SkillDraft = {
@@ -176,8 +165,19 @@ function playMessageNotificationSound(): void {
   }
 }
 
-function App(): JSX.Element {
-  const [auth, setAuth] = useState<{ user: LoginUser; settings: UserSettings } | null>(null);
+function AppRoot(): JSX.Element {
+  const session = useSession(isSettingsWindowMode || isProfileWindowMode || isProfileEditWindowMode);
+  return <App key={session.generation} session={session} />;
+}
+
+function App({ session }: { session: SessionState }): JSX.Element {
+  const { auth, rememberedAccounts, selectedRememberedId, setSelectedRememberedId,
+    showAccountForm, setShowAccountForm, loginError, booting } = session;
+  const api = useMemo(() => session.scope.bind(remoteApi, session.generation), [session.scope, session.generation]);
+  const setAuth = (update: Parameters<typeof session.scope.update>[1]) => session.scope.update(session.generation, update);
+  const setLoginError = (message: string) => {
+    if (session.scope.isCurrent(session.generation)) session.setLoginError(message);
+  };
   const [settingsDraft, setSettingsDraft] = useState<UserSettings | null>(null);
   const [loginForm, setLoginForm] = useState({ username: "", password: "" });
   const [loginMode, setLoginMode] = useState<LoginMode>("login");
@@ -192,14 +192,9 @@ function App(): JSX.Element {
     confirmPassword: ""
   });
   const [rememberMe, setRememberMe] = useState(true);
-  const [rememberedAccounts, setRememberedAccounts] = useState<RememberedAccount[]>([]);
-  const [selectedRememberedId, setSelectedRememberedId] = useState<string | null>(null);
-  const [showAccountForm, setShowAccountForm] = useState(false);
-  const [loginError, setLoginError] = useState("");
   const [loginFieldErrors, setLoginFieldErrors] = useState<FieldErrors>({});
   const [profileFieldErrors, setProfileFieldErrors] = useState<FieldErrors>({});
   const [skillEditorErrors, setSkillEditorErrors] = useState<FieldErrors>({});
-  const [booting, setBooting] = useState(true);
   const [settingsSection, setSettingsSection] = useState<SettingsCategory>("general");
 
   const [view, setView] = useState<View>("agents");
@@ -213,7 +208,8 @@ function App(): JSX.Element {
   const [toast, setToast] = useState<NoticeToastState>({ id: 0, message: "", tone: "info", visible: false });
   const [serverStatus, setServerStatus] = useState<ServerStatus>("checking");
   const lastAnnouncedServerStatus = useRef<ServerStatus>("checking");
-  const [busy, setBusy] = useState(false);
+  const [working, setBusy] = useState(false);
+  const busy = working || session.busy;
   const [skillSending, setSkillSending] = useState(false);
   const [skills, setSkills] = useState<SkillSummary[]>([]);
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
@@ -352,8 +348,12 @@ function App(): JSX.Element {
   }
 
   useEffect(() => {
-    void restoreSession();
-  }, []);
+    if (auth && !isSettingsWindowMode && !isProfileWindowMode && !isProfileEditWindowMode) void refreshAll(auth.user.id);
+  }, [auth?.user.id]);
+
+  useEffect(() => {
+    if (session.notice) setNotice(session.notice);
+  }, [session.notice]);
 
   useEffect(() => {
     if (!notice || notice === "准备就绪") return undefined;
@@ -421,10 +421,6 @@ function App(): JSX.Element {
     return () => window.removeEventListener("keydown", listener);
   }, [chatDrawerOpen]);
 
-  useEffect(() => window.chaq.auth.onLoggedOut(() => {
-    void applyLoggedOutState();
-  }), []);
-
   useEffect(() => {
     if (auth) {
       setSettingsDraft(auth.settings);
@@ -452,6 +448,7 @@ function App(): JSX.Element {
   useEffect(() => {
     if (!auth || isSettingsWindowMode || isProfileWindowMode || isProfileEditWindowMode) return undefined;
     return connectRealtime((event) => {
+      if (!session.scope.isCurrent(session.generation)) return;
       window.dispatchEvent(new CustomEvent("chaq:realtime", { detail: event }));
       if (event.type !== "conversation.message") return;
       const message = event.payload as Partial<ConversationMessage> | null;
@@ -502,150 +499,17 @@ function App(): JSX.Element {
     }
   }, [selectedProvider, cloudModel]);
 
-  async function restoreSession(): Promise<void> {
-    if (isSettingsWindowMode || isProfileWindowMode || isProfileEditWindowMode) {
-      const token = await window.chaq.auth.consumeWindowBootstrap();
-      if (token) {
-        sessionStorage.setItem("chaq.sessionToken", token);
-      }
-      if (!token && !sessionStorage.getItem("chaq.sessionToken")) {
-        setLoginError("窗口授权已失效，请关闭后从主窗口重新打开。");
-        setBooting(false);
-        return;
-      }
-      try {
-        const [user, settings] = await Promise.all([api.me(), api.settings()]);
-        setAuth({ user, settings });
-      } catch (error) {
-        setLoginError(messageOf(error));
-      } finally {
-        setBooting(false);
-      }
-      return;
-    }
-
-    await window.chaq.window.setMode("login");
-    const loaded = loadRememberedAccounts();
-    let remembered = loaded.accounts;
-    let migrationError = "";
-    for (const legacy of loaded.legacySessions) {
-      try {
-        await window.chaq.auth.saveRememberedSession({
-          accountId: legacy.accountId,
-          sessionToken: legacy.sessionToken,
-          expiresAt: legacy.expiresAt
-        });
-      } catch (error) {
-        migrationError = messageOf(error);
-      }
-    }
-    saveRememberedAccounts(remembered);
-    const legacyToken = localStorage.getItem("chaq.sessionToken");
-    if (legacyToken) {
-      sessionStorage.setItem("chaq.sessionToken", legacyToken);
-      try {
-        const [user, settings] = await Promise.all([api.me(), api.settings()]);
-        const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
-        await window.chaq.auth.saveRememberedSession({
-          accountId: user.id,
-          sessionToken: legacyToken,
-          expiresAt
-        });
-        remembered = upsertRememberedAccount(remembered, { expiresAt, user, settings });
-        saveRememberedAccounts(remembered);
-      } catch (error) {
-        migrationError = messageOf(error);
-      }
-    }
-    localStorage.removeItem("chaq.sessionToken");
-    sessionStorage.removeItem("chaq.sessionToken");
-    setRememberedAccounts(remembered);
-    setSelectedRememberedId(remembered[0]?.user.id ?? null);
-    setShowAccountForm(remembered.length === 0);
-    if (migrationError) setLoginError(`旧登录状态未能安全迁移，请重新登录。${migrationError}`);
-    setBooting(false);
-  }
-
-  async function loginWithRemembered(): Promise<void> {
-    if (!selectedRemembered) {
-      setShowAccountForm(true);
-      return;
-    }
-    setLoginError("");
-    setBusy(true);
-    try {
-      const credential = await window.chaq.auth.getRememberedSession(selectedRemembered.user.id);
-      if (!credential) throw new ApiError("登录状态已过期。", 401);
-      sessionStorage.setItem("chaq.sessionToken", credential.sessionToken);
-      const [user, settings] = await Promise.all([api.me(), api.settings()]);
-      const updated = upsertRememberedAccount(rememberedAccounts, {
-        ...selectedRemembered,
-        expiresAt: credential.expiresAt,
-        user,
-        settings
-      });
-      setRememberedAccounts(updated);
-      saveRememberedAccounts(updated);
-      setAuth({ user, settings });
-      await window.chaq.window.setMode("main");
-      await window.chaq.window.setOpacity(settings.windowOpacity);
-      await refreshAll(user.id);
-    } catch (error) {
-      sessionStorage.removeItem("chaq.sessionToken");
-      const invalidCredential = error instanceof ApiError && (error.status === 401 || error.status === 403);
-      if (invalidCredential) {
-        await window.chaq.auth.deleteRememberedSession(selectedRemembered.user.id).catch(() => undefined);
-        const next = rememberedAccounts.filter((account) => account.user.id !== selectedRemembered.user.id);
-        setRememberedAccounts(next);
-        saveRememberedAccounts(next);
-        setSelectedRememberedId(next[0]?.user.id ?? null);
-        setShowAccountForm(true);
-        setLoginError(`登录状态已失效，请重新输入账号密码。${messageOf(error)}`);
-      } else {
-        setLoginError(`暂时无法恢复登录，请检查网络后重试。${messageOf(error)}`);
-      }
-    } finally {
-      setBooting(false);
-      setBusy(false);
-    }
-  }
-
   async function login(event: FormEvent): Promise<void> {
     event.preventDefault();
-    if (loginMode === "register") {
-      await register(event);
-      return;
-    }
-    if (!showAccountForm && selectedRemembered) {
-      await loginWithRemembered();
-      return;
-    }
+    if (loginMode === "register") return register();
+    if (!showAccountForm && selectedRemembered) return session.loginWithRemembered(selectedRemembered.user.id);
     const fieldErrors = validateLoginFields(loginForm);
     setLoginFieldErrors(fieldErrors);
     if (hasFieldErrors(fieldErrors)) {
       setLoginError("请先补全登录信息。");
       return;
     }
-    setLoginError("");
-    setBusy(true);
-    try {
-      const result = await api.login({ username: loginForm.username, password: loginForm.password });
-      sessionStorage.setItem("chaq.sessionToken", result.sessionToken);
-      setAuth({ user: result.user, settings: result.settings });
-      await window.chaq.window.setMode("main");
-      await window.chaq.window.setOpacity(result.settings.windowOpacity);
-      const persistence = rememberMe
-        ? rememberAccount({ expiresAt: result.expiresAt, user: result.user, settings: result.settings }, result.sessionToken)
-        : forgetRememberedAccount(result.user.id);
-      void persistence.then((warning) => {
-        if (warning) setNotice(warning);
-      });
-      await refreshAll(result.user.id);
-    } catch (error) {
-      setLoginError(messageOf(error));
-    } finally {
-      setBusy(false);
-    }
+    await session.login(loginForm, rememberMe);
   }
 
   async function sendRegisterCode(): Promise<void> {
@@ -661,100 +525,25 @@ function App(): JSX.Element {
       await api.requestRegisterCode({ email: registerForm.email });
       setLoginError("验证码已发送，请查看邮箱。");
     } catch (error) {
-      setLoginError(messageOf(error));
+      if (!isSupersededRequest(error)) setLoginError(messageOf(error));
     } finally {
       setBusy(false);
     }
   }
 
-  async function register(_event?: FormEvent): Promise<void> {
+  async function register(): Promise<void> {
     const fieldErrors = validateRegisterFields(registerForm);
     setLoginFieldErrors(fieldErrors);
     if (hasFieldErrors(fieldErrors)) {
       setLoginError("请检查标红的注册信息。");
       return;
     }
-    setLoginError("");
-    setBusy(true);
-    try {
-      const result = await api.register(registerForm);
-      sessionStorage.setItem("chaq.sessionToken", result.sessionToken);
-      setAuth({ user: result.user, settings: result.settings });
-      await window.chaq.window.setMode("main");
-      await window.chaq.window.setOpacity(result.settings.windowOpacity);
-      const persistence = rememberMe
-        ? rememberAccount({ expiresAt: result.expiresAt, user: result.user, settings: result.settings }, result.sessionToken)
-        : forgetRememberedAccount(result.user.id);
-      void persistence.then((warning) => {
-        if (warning) setNotice(warning);
-      });
-      await refreshAll(result.user.id);
-    } catch (error) {
-      setLoginError(messageOf(error));
-    } finally {
-      setBusy(false);
-    }
+    await session.register(registerForm, rememberMe);
   }
 
   async function logout(): Promise<void> {
     if (!confirm("退出当前账号？本机保存的快速登录凭证也会一并移除。")) return;
-    await api.logout().catch(() => undefined);
-    await window.chaq.auth.broadcastLogout();
-  }
-
-  async function applyLoggedOutState(): Promise<void> {
-    const accountId = auth?.user.id;
-    localStorage.removeItem("chaq.sessionToken");
-    sessionStorage.removeItem("chaq.sessionToken");
-    if (accountId) await window.chaq.auth.deleteRememberedSession(accountId).catch(() => undefined);
-    setRememberedAccounts((current) => {
-      const next = accountId ? current.filter((account) => account.user.id !== accountId) : current;
-      saveRememberedAccounts(next);
-      setSelectedRememberedId(next[0]?.user.id ?? null);
-      setShowAccountForm(next.length === 0);
-      return next;
-    });
-    setAuth(null);
-    setSkills([]);
-    changeSelectedSkillId(null);
-    setLoginFieldErrors({});
-    setSkillEditorErrors({});
-    setLoginError("");
-    setLoginMode("login");
-    if (isSettingsWindowMode || isProfileWindowMode || isProfileEditWindowMode) {
-      await window.chaq.window.close();
-      return;
-    }
-    await window.chaq.window.setMode("login");
-  }
-
-  async function rememberAccount(account: RememberedAccount, sessionToken: string): Promise<string | null> {
-    try {
-      await window.chaq.auth.saveRememberedSession({
-        accountId: account.user.id,
-        sessionToken,
-        expiresAt: account.expiresAt
-      });
-      const next = upsertRememberedAccount(rememberedAccounts, account);
-      setRememberedAccounts(next);
-      setSelectedRememberedId(account.user.id);
-      saveRememberedAccounts(next);
-      return null;
-    } catch (error) {
-      return `已登录，但无法安全记住账号；本次将使用临时会话：${messageOf(error)}`;
-    }
-  }
-
-  async function forgetRememberedAccount(accountId: string): Promise<string | null> {
-    try {
-      await window.chaq.auth.deleteRememberedSession(accountId);
-      const next = rememberedAccounts.filter((account) => account.user.id !== accountId);
-      setRememberedAccounts(next);
-      saveRememberedAccounts(next);
-      return null;
-    } catch (error) {
-      return `已登录，但无法更新本机的记住账号设置：${messageOf(error)}`;
-    }
+    await session.logout();
   }
 
   async function refreshAll(userId = auth?.user.id): Promise<void> {
@@ -3155,31 +2944,6 @@ function fallbackImage(event: React.SyntheticEvent<HTMLImageElement>): void {
   event.currentTarget.src = defaultAvatarUrl;
 }
 
-function loadRememberedAccounts(): { accounts: RememberedAccount[]; legacySessions: LegacyRememberedSession[] } {
-  try {
-    const parsed = JSON.parse(localStorage.getItem("chaq.rememberedAccounts") || "[]") as Array<
-      Partial<RememberedAccount> & { sessionToken?: unknown }
-    >;
-    if (!Array.isArray(parsed)) return { accounts: [], legacySessions: [] };
-    const accounts: RememberedAccount[] = [];
-    const legacySessions: LegacyRememberedSession[] = [];
-    for (const account of parsed) {
-      if (!account.user?.id || !account.settings || typeof account.expiresAt !== "string") continue;
-      accounts.push({ expiresAt: account.expiresAt, user: account.user, settings: account.settings });
-      if (typeof account.sessionToken === "string" && account.sessionToken) {
-        legacySessions.push({
-          accountId: account.user.id,
-          sessionToken: account.sessionToken,
-          expiresAt: account.expiresAt
-        });
-      }
-    }
-    return { accounts: accounts.slice(0, 6), legacySessions: legacySessions.slice(0, 6) };
-  } catch {
-    return { accounts: [], legacySessions: [] };
-  }
-}
-
 function loadPinnedSkillIds(): string[] {
   try {
     const parsed = JSON.parse(localStorage.getItem("chaq.pinnedSkills") || "[]");
@@ -3189,17 +2953,4 @@ function loadPinnedSkillIds(): string[] {
   }
 }
 
-function saveRememberedAccounts(accounts: RememberedAccount[]): void {
-  const metadata = accounts.slice(0, 6).map((account) => ({
-    expiresAt: account.expiresAt,
-    user: account.user,
-    settings: account.settings
-  }));
-  localStorage.setItem("chaq.rememberedAccounts", JSON.stringify(metadata));
-}
-
-function upsertRememberedAccount(accounts: RememberedAccount[], account: RememberedAccount): RememberedAccount[] {
-  return [account, ...accounts.filter((item) => item.user.id !== account.user.id)].slice(0, 6);
-}
-
-createRoot(document.getElementById("root")!).render(<App />);
+createRoot(document.getElementById("root")!).render(<AppRoot />);
