@@ -8,9 +8,10 @@ import {
   TokenTransactionKind
 } from "@prisma/client";
 import { ModelsService } from "./models.service";
+import { WalletService } from "../billing/wallet.service";
 
 function serviceWith(prisma: Record<string, unknown>): ModelsService {
-  return new ModelsService(prisma as never, { ensureUser: async () => ({ id: "user-1" }) } as never);
+  return new ModelsService(prisma as never, new WalletService(), { ensureUser: async () => ({ id: "user-1" }) } as never);
 }
 
 test("public provider listing is limited to enabled platform providers", async () => {
@@ -288,7 +289,7 @@ test("model settlement refunds the unused hold and credits a service fee exactly
     modelCallLog: { create: async () => { logs += 1; } },
     user: { findUniqueOrThrow: async () => ({ tokenBalance: 70 }) }
   };
-  const users = {
+  const wallet = {
     settleTokenReservationInTransaction: async (_tx: unknown, _userId: string, reserved: number, rows: any[]) => {
       assert.equal(reserved, 100);
       charges.push(...rows.map((row) => ({ amount: row.amount, kind: row.kind })));
@@ -299,7 +300,7 @@ test("model settlement refunds the unused hold and credits a service fee exactly
       return 510;
     }
   };
-  const service = new ModelsService({ $transaction: async (callback: any) => callback(tx) } as never, users as never) as any;
+  const service = new ModelsService({ $transaction: async (callback: any) => callback(tx) } as never, wallet as never, {} as never) as any;
   const input = {
     result: { content: "hello", promptTokens: 10, completionTokens: 5 },
     modelCharge: 20,
@@ -368,11 +369,11 @@ test("stale reservations are refunded, reclaimed with a new attempt, and reject 
     },
     modelCallLog: { create: async () => undefined }
   };
-  const users = {
+  const wallet = {
     releaseTokenReservationInTransaction: async () => { releases += 1; return 100; },
     reserveTokensInTransaction: async () => { reserves += 1; return 60; }
   };
-  const service = new ModelsService({ $transaction: async (callback: any) => callback(tx) } as never, users as never) as any;
+  const service = new ModelsService({ $transaction: async (callback: any) => callback(tx) } as never, wallet as never, {} as never) as any;
   service.pendingReservationStaleMs = () => 1;
   const claim = await service.reserveModelCall({
     requestKey: reservation.requestKey,

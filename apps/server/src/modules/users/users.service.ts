@@ -1,24 +1,24 @@
 import { randomBytes, randomInt } from "node:crypto";
 import { BadRequestException, ConflictException, ForbiddenException, Inject, Injectable, NotFoundException } from "@nestjs/common";
-import { Prisma, RechargeOrderStatus, TokenTransactionKind, User, UserRole } from "@prisma/client";
+import { Prisma, RechargeOrderStatus, TokenTransactionKind, User } from "@prisma/client";
 import { isValidPassword, normalizeEmail, sendVerificationEmail } from "../../common/email";
 import { hashPassword, hashSessionToken, verifyPassword } from "../../common/password";
 import { PrismaService } from "../../common/prisma.service";
 import { RateLimitService } from "../../common/rate-limit.service";
-
-const maxTokenBalance = 2_000_000_000;
+import { WalletCharge, WalletService } from "../billing/wallet.service";
+import { UserAccessService } from "./user-access.service";
 
 @Injectable()
 export class UsersService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
-    @Inject(RateLimitService) private readonly rateLimit: RateLimitService
+    @Inject(RateLimitService) private readonly rateLimit: RateLimitService,
+    @Inject(WalletService) private readonly wallet: WalletService,
+    @Inject(UserAccessService) private readonly userAccess: UserAccessService
   ) {}
 
   async ensureUser(userId: string): Promise<User> {
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-    if (!user) throw new NotFoundException("User not found.");
-    return user;
+    return this.userAccess.ensureUser(userId);
   }
 
   async me(userId: string) {
@@ -105,10 +105,7 @@ export class UsersService {
   }
 
   async assertAdmin(userId: string): Promise<void> {
-    const user = await this.ensureUser(userId);
-    if (user.role !== UserRole.ADMIN) {
-      throw new ForbiddenException("Admin permission required.");
-    }
+    return this.userAccess.assertAdmin(userId);
   }
 
   async adjustTokens(
@@ -120,40 +117,7 @@ export class UsersService {
   ) {
     await this.assertAdmin(adminUserId);
     await this.ensureUser(targetUserId);
-    if (!Number.isSafeInteger(amount) || amount === 0) {
-      throw new BadRequestException("Token adjustment must be a non-zero safe integer.");
-    }
-
-    return this.prisma.$transaction(async (tx) => {
-      if (amount < 0) {
-        const changed = await tx.user.updateMany({
-          where: { id: targetUserId, tokenBalance: { gte: -amount } },
-          data: { tokenBalance: { decrement: -amount } }
-        });
-        if (!changed.count) {
-          throw new ForbiddenException("Token balance cannot become negative.");
-        }
-      } else {
-        const changed = await tx.user.updateMany({
-          where: { id: targetUserId, tokenBalance: { lte: maxTokenBalance - amount } },
-          data: { tokenBalance: { increment: amount } }
-        });
-        if (!changed.count) {
-          throw new ForbiddenException(`Token balance cannot exceed ${maxTokenBalance}.`);
-        }
-      }
-      const user = await tx.user.findUniqueOrThrow({ where: { id: targetUserId } });
-      const transaction = await tx.tokenTransaction.create({
-        data: {
-          userId: targetUserId,
-          kind,
-          amount,
-          balanceAfter: user.tokenBalance,
-          note
-        }
-      });
-      return { user, transaction };
-    });
+    return this.prisma.$transaction((tx) => this.wallet.adjustTokensInTransaction(tx, targetUserId, amount, kind, note));
   }
 
   async chargeForModelUsage(
@@ -167,142 +131,37 @@ export class UsersService {
     return this.prisma.$transaction((tx) => this.chargeForModelUsageInTransaction(tx, userId, amount, note, metadata, kind));
   }
 
-  async chargeForModelUsageInTransaction(
-    tx: Prisma.TransactionClient,
-    userId: string,
-    amount: number,
-    note: string,
-    metadata?: Prisma.InputJsonValue,
-    kind: TokenTransactionKind = TokenTransactionKind.CLOUD_MODEL_USAGE
+  chargeForModelUsageInTransaction(
+    ...args: Parameters<WalletService["chargeForModelUsageInTransaction"]>
   ): Promise<number> {
-    const changed = await tx.user.updateMany({
-      where: { id: userId, tokenBalance: { gte: amount } },
-      data: { tokenBalance: { decrement: amount } }
-    });
-    if (!changed.count) {
-      throw new ForbiddenException("Token balance is insufficient for this model call.");
-    }
-    const user = await tx.user.findUniqueOrThrow({ where: { id: userId }, select: { tokenBalance: true } });
-    await tx.tokenTransaction.create({
-      data: {
-        userId,
-        kind,
-        amount: -amount,
-        balanceAfter: user.tokenBalance,
-        note,
-        metadata
-      }
-    });
-    return user.tokenBalance;
+    return this.wallet.chargeForModelUsageInTransaction(...args);
   }
 
-  /**
-   * Places a temporary hold by removing tokens from the spendable balance.
-   * No ledger entry is written until the external call is settled, so failed
-   * calls can be released without creating artificial usage/refund rows.
-   */
-  async reserveTokensInTransaction(
-    tx: Prisma.TransactionClient,
-    userId: string,
-    amount: number
+  reserveTokensInTransaction(
+    ...args: Parameters<WalletService["reserveTokensInTransaction"]>
   ): Promise<number> {
-    if (!Number.isInteger(amount) || amount < 0) {
-      throw new BadRequestException("Token reservation amount must be a non-negative integer.");
-    }
-    if (amount > 0) {
-      const changed = await tx.user.updateMany({
-        where: { id: userId, tokenBalance: { gte: amount } },
-        data: { tokenBalance: { decrement: amount } }
-      });
-      if (!changed.count) {
-        throw new ForbiddenException("Token balance is insufficient for the maximum cost of this model call.");
-      }
-    }
-    const user = await tx.user.findUniqueOrThrow({ where: { id: userId }, select: { tokenBalance: true } });
-    return user.tokenBalance;
+    return this.wallet.reserveTokensInTransaction(...args);
   }
 
-  async releaseTokenReservationInTransaction(
-    tx: Prisma.TransactionClient,
-    userId: string,
-    reservedTokens: number
+  releaseTokenReservationInTransaction(
+    ...args: Parameters<WalletService["releaseTokenReservationInTransaction"]>
   ): Promise<number> {
-    if (!Number.isInteger(reservedTokens) || reservedTokens < 0) {
-      throw new BadRequestException("Reserved token amount must be a non-negative integer.");
-    }
-    if (reservedTokens === 0) {
-      return (await tx.user.findUniqueOrThrow({ where: { id: userId }, select: { tokenBalance: true } })).tokenBalance;
-    }
-    const user = await tx.user.update({
-      where: { id: userId },
-      data: { tokenBalance: { increment: reservedTokens } },
-      select: { tokenBalance: true }
-    });
-    return user.tokenBalance;
+    return this.wallet.releaseTokenReservationInTransaction(...args);
   }
 
-  async settleTokenReservationInTransaction(
+  settleTokenReservationInTransaction(
     tx: Prisma.TransactionClient,
     userId: string,
     reservedTokens: number,
-    charges: Array<{
-      amount: number;
-      kind: TokenTransactionKind;
-      note: string;
-      metadata?: Prisma.InputJsonValue;
-    }>
+    charges: readonly WalletCharge[]
   ): Promise<number> {
-    const actualCharge = charges.reduce((sum, charge) => sum + charge.amount, 0);
-    if (!Number.isInteger(reservedTokens) || reservedTokens < 0 || charges.some((charge) => !Number.isInteger(charge.amount) || charge.amount < 0)) {
-      throw new BadRequestException("Token settlement amounts must be non-negative integers.");
-    }
-    if (actualCharge > reservedTokens) {
-      throw new BadRequestException("Actual model charge exceeded the reserved maximum.");
-    }
-    const refund = reservedTokens - actualCharge;
-    const finalBalance = refund > 0
-      ? (await tx.user.update({
-        where: { id: userId },
-        data: { tokenBalance: { increment: refund } },
-        select: { tokenBalance: true }
-      })).tokenBalance
-      : (await tx.user.findUniqueOrThrow({ where: { id: userId }, select: { tokenBalance: true } })).tokenBalance;
-    let followingCharges = actualCharge;
-    for (const charge of charges) {
-      followingCharges -= charge.amount;
-      if (charge.amount === 0) continue;
-      await tx.tokenTransaction.create({
-        data: {
-          userId,
-          kind: charge.kind,
-          amount: -charge.amount,
-          balanceAfter: finalBalance + followingCharges,
-          note: charge.note,
-          metadata: charge.metadata
-        }
-      });
-    }
-    return finalBalance;
+    return this.wallet.settleTokenReservationInTransaction(tx, userId, reservedTokens, charges);
   }
 
-  async creditTokensInTransaction(
-    tx: Prisma.TransactionClient,
-    userId: string,
-    amount: number,
-    note: string,
-    metadata?: Prisma.InputJsonValue,
-    kind: TokenTransactionKind = TokenTransactionKind.AGENT_SERVICE_EARNING
+  creditTokensInTransaction(
+    ...args: Parameters<WalletService["creditTokensInTransaction"]>
   ): Promise<number> {
-    if (amount <= 0) return (await tx.user.findUniqueOrThrow({ where: { id: userId }, select: { tokenBalance: true } })).tokenBalance;
-    const user = await tx.user.update({
-      where: { id: userId },
-      data: { tokenBalance: { increment: amount } },
-      select: { tokenBalance: true }
-    });
-    await tx.tokenTransaction.create({
-      data: { userId, kind, amount, balanceAfter: user.tokenBalance, note, metadata }
-    });
-    return user.tokenBalance;
+    return this.wallet.creditTokensInTransaction(...args);
   }
 
   async tokenLedger(userId: string) {
@@ -515,30 +374,19 @@ export class UsersService {
         }
       });
       if (!changed.count) throw new BadRequestException("Recharge order has already been processed.");
-      const user = await tx.user.update({
-        where: { id: order.userId },
-        data: { tokenBalance: { increment: order.amountTokens } },
-        select: { tokenBalance: true }
-      });
-      if (user.tokenBalance > maxTokenBalance) {
-        throw new BadRequestException("Token balance would exceed the current platform limit.");
-      }
-      const transaction = await tx.tokenTransaction.create({
-        data: {
-          userId: order.userId,
-          kind: TokenTransactionKind.RECHARGE,
-          amount: order.amountTokens,
-          balanceAfter: user.tokenBalance,
-          note: note.trim() || `Manual bank transfer confirmed: ${order.orderNo}`,
-          metadata: {
-            rechargeOrderId: order.id,
-            orderNo: order.orderNo,
-            paymentReference: order.paymentReference,
-            payableCny: order.payableCny,
-            paymentMethod: order.paymentMethod
-          } as Prisma.InputJsonValue
+      const transaction = await this.wallet.creditRechargeInTransaction(
+        tx,
+        order.userId,
+        order.amountTokens,
+        note.trim() || `Manual bank transfer confirmed: ${order.orderNo}`,
+        {
+          rechargeOrderId: order.id,
+          orderNo: order.orderNo,
+          paymentReference: order.paymentReference,
+          payableCny: order.payableCny,
+          paymentMethod: order.paymentMethod
         }
-      });
+      );
       const updated = await tx.rechargeOrder.update({
         where: { id: orderId },
         data: { paidTransactionId: transaction.id }

@@ -3,6 +3,15 @@ import test from "node:test";
 import { RechargeOrderStatus, TokenTransactionKind, UserRole } from "@prisma/client";
 import { hashSessionToken } from "../../common/password";
 import { UsersService } from "./users.service";
+import { PrismaService } from "../../common/prisma.service";
+import { RateLimitService } from "../../common/rate-limit.service";
+import { WalletService } from "../billing/wallet.service";
+import { UserAccessService } from "./user-access.service";
+
+function serviceWith(prisma: unknown, rateLimit: unknown = {}) {
+  const client = prisma as PrismaService;
+  return new UsersService(client, rateLimit as RateLimitService, new WalletService(), new UserAccessService(client));
+}
 
 test("admin token adjustments use atomic increments and ledger the committed balance", async () => {
   let balance = 100;
@@ -47,7 +56,7 @@ test("admin token adjustments use atomic increments and ledger the committed bal
       }
     })
   };
-  const service = new UsersService(prisma as never, {} as never);
+  const service = serviceWith(prisma);
 
   await service.adjustTokens("admin-1", "target-1", 25, TokenTransactionKind.ADMIN_ADJUSTMENT);
   await service.adjustTokens("admin-1", "target-1", -40, TokenTransactionKind.ADMIN_ADJUSTMENT);
@@ -79,7 +88,7 @@ test("admin token adjustment rejects an atomic decrement that would overdraw", a
   };
 
   await assert.rejects(
-    () => new UsersService(prisma as never, {} as never).adjustTokens(
+    () => serviceWith(prisma).adjustTokens(
       "admin-1",
       "target-1",
       -11,
@@ -112,7 +121,7 @@ test("admin token adjustment rejects an atomic increment above the balance ceili
   };
 
   await assert.rejects(
-    () => new UsersService(prisma as never, {} as never).adjustTokens(
+    () => serviceWith(prisma).adjustTokens(
       "admin-1",
       "target-1",
       2,
@@ -156,7 +165,7 @@ test("wallet summary separates model spending, service fees, and per-agent earni
     agent: { findMany: async () => [{ id: "agent-1", name: "Mira" }] }
   };
 
-  const summary = await new UsersService(prisma as never, {} as never).walletSummary("creator-1");
+  const summary = await serviceWith(prisma).walletSummary("creator-1");
   assert.equal(summary.balance, 84);
   assert.equal(summary.totalSpent, 26);
   assert.equal(summary.modelSpent, 18);
@@ -184,7 +193,7 @@ test("a configured recharge pilot restricts access without exposing the username
     }
   };
   await assert.rejects(
-    () => new UsersService(prisma as never, {} as never).createRechargeOrder("jiang_yy", { amount: 1, unit: "m" }),
+    () => serviceWith(prisma).createRechargeOrder("jiang_yy", { amount: 1, unit: "m" }),
     /not available for this account/
   );
 });
@@ -227,7 +236,7 @@ test("a configured pilot recharge creates a pending bank transfer order without 
   };
   const rateLimit = { consume: async () => ({ allowed: true, limit: 6, remaining: 5, retryAfterSeconds: 0 }) };
 
-  const result = await new UsersService(prisma as never, rateLimit as never).createRechargeOrder("pilot_user", { amount: 2, unit: "m" });
+  const result = await serviceWith(prisma, rateLimit).createRechargeOrder("pilot_user", { amount: 2, unit: "m" });
   assert.equal(result.amountTokens, 2_000_000);
   assert.equal(result.payableCny, 4);
   assert.equal(result.status, "pending");
@@ -245,7 +254,7 @@ test("blank recharge pilot allows every authenticated user and is not returned t
     }
   };
 
-  const config = await new UsersService(prisma as never, {} as never).rechargeConfig("user-1");
+  const config = await serviceWith(prisma).rechargeConfig("user-1");
   assert.equal(config.allowed, true);
   assert.equal("allowedUsername" in config, false);
 });
@@ -258,7 +267,7 @@ test("email binding code sends are limited by both target email and requesting u
       return { allowed: true, limit: 5, remaining: 4, retryAfterSeconds: 0 };
     }
   };
-  const service = new UsersService({} as never, rateLimit as never) as any;
+  const service = serviceWith({}, rateLimit) as any;
 
   await service.assertEmailCodeRateLimit("target@example.com", "bind_email", "user-1");
   assert.deepEqual(buckets, ["email-code:bind_email", "email-code-actor:bind_email"]);
@@ -275,7 +284,7 @@ test("email binding verification code is consumed atomically", async () => {
   const rateLimit = {
     consume: async () => ({ allowed: true, limit: 8, remaining: 7, retryAfterSeconds: 0 })
   };
-  const service = new UsersService(prisma as never, rateLimit as never) as any;
+  const service = serviceWith(prisma, rateLimit) as any;
 
   await assert.rejects(service.consumeCode("target@example.com", "bind_email", code), /验证码/);
 });
@@ -337,7 +346,7 @@ test("admin confirmation credits a recharge order exactly once", async () => {
     })
   };
 
-  const result = await new UsersService(prisma as never, {} as never).moderateRechargeOrder("admin-local", "order-1", "confirm");
+  const result = await serviceWith(prisma).moderateRechargeOrder("admin-local", "order-1", "confirm");
   assert.equal(result.status, "paid");
   assert.equal(transactionData.kind, TokenTransactionKind.RECHARGE);
   assert.equal(transactionData.amount, 2_000_000);

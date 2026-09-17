@@ -15,7 +15,8 @@ import type { CloudChatRequest, CloudChatResponse, DistillRequest, DistillRespon
 import { assertOutboundUrl, readResponseJsonLimited, safeFetch } from "../../common/outbound-http";
 import { PrismaService } from "../../common/prisma.service";
 import { embedText } from "../../common/vector-search";
-import { UsersService } from "../users/users.service";
+import { WalletCharge, WalletService } from "../billing/wallet.service";
+import { UserAccessService } from "../users/user-access.service";
 
 type ProviderInput = {
   id?: string;
@@ -86,7 +87,8 @@ export type EmbeddingResult = {
 export class ModelsService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
-    @Inject(UsersService) private readonly users: UsersService
+    @Inject(WalletService) private readonly wallet: WalletService,
+    @Inject(UserAccessService) private readonly userAccess: UserAccessService
   ) {}
 
   async publicProviders(): Promise<ModelProviderPublic[]> {
@@ -98,7 +100,7 @@ export class ModelsService {
   }
 
   async adminProviders(userId: string): Promise<ModelProviderPublic[]> {
-    await this.users.assertAdmin(userId);
+    await this.userAccess.assertAdmin(userId);
     const providers = await this.prisma.modelProviderConfig.findMany({
       where: { scope: ModelProviderScope.PLATFORM },
       orderBy: { createdAt: "desc" }
@@ -107,7 +109,7 @@ export class ModelsService {
   }
 
   async upsertProvider(userId: string, input: ProviderInput): Promise<ModelProviderPublic> {
-    await this.users.assertAdmin(userId);
+    await this.userAccess.assertAdmin(userId);
     const baseUrl = this.platformProviderBaseUrl(input.baseUrl);
     const trimmedApiKey = input.apiKey?.trim() ?? "";
     const existing = input.id
@@ -137,7 +139,7 @@ export class ModelsService {
   }
 
   async updateProviderStatus(userId: string, id: string, enabled: boolean): Promise<ModelProviderPublic> {
-    await this.users.assertAdmin(userId);
+    await this.userAccess.assertAdmin(userId);
     const existing = await this.prisma.modelProviderConfig.findFirst({ where: { id, scope: ModelProviderScope.PLATFORM } });
     if (!existing) throw new NotFoundException("Platform model provider not found.");
     const provider = await this.prisma.modelProviderConfig.update({ where: { id }, data: { enabled } });
@@ -145,7 +147,7 @@ export class ModelsService {
   }
 
   async availableProviders(userId: string): Promise<ModelProviderPublic[]> {
-    await this.users.ensureUser(userId);
+    await this.userAccess.ensureUser(userId);
     const providers = await this.prisma.modelProviderConfig.findMany({
       where: {
         enabled: true,
@@ -160,7 +162,7 @@ export class ModelsService {
   }
 
   async privateProviders(userId: string): Promise<ModelProviderPublic[]> {
-    await this.users.ensureUser(userId);
+    await this.userAccess.ensureUser(userId);
     const providers = await this.prisma.modelProviderConfig.findMany({
       where: { scope: ModelProviderScope.USER_PRIVATE, ownerId: userId },
       orderBy: { updatedAt: "desc" }
@@ -169,7 +171,7 @@ export class ModelsService {
   }
 
   async upsertPrivateProvider(userId: string, input: PrivateProviderInput): Promise<ModelProviderPublic> {
-    await this.users.ensureUser(userId);
+    await this.userAccess.ensureUser(userId);
     if (input.kind.toLowerCase() === "ollama") {
       throw new BadRequestException("Private model providers must use a cloud API reachable by the server.");
     }
@@ -220,7 +222,7 @@ export class ModelsService {
   }
 
   async testPrivateProvider(userId: string, input: PrivateProviderInput): Promise<{ ok: true; message: string }> {
-    await this.users.ensureUser(userId);
+    await this.userAccess.ensureUser(userId);
     if (input.kind.toLowerCase() === "ollama") {
       throw new BadRequestException("Private model providers must use a cloud API reachable by the server.");
     }
@@ -512,7 +514,7 @@ export class ModelsService {
               const current = await tx.modelCallReservation.findUniqueOrThrow({ where: { id: existing.id } });
               return this.classifyReservation(current);
             }
-            await this.users.releaseTokenReservationInTransaction(tx, existing.userId, existing.reservedTokens);
+            await this.wallet.releaseTokenReservationInTransaction(tx, existing.userId, existing.reservedTokens);
             existing = await tx.modelCallReservation.findUniqueOrThrow({ where: { id: existing.id } });
           }
           const claimed = await tx.modelCallReservation.updateMany({
@@ -541,11 +543,11 @@ export class ModelsService {
             const current = await tx.modelCallReservation.findUniqueOrThrow({ where: { id: existing.id } });
             return this.classifyReservation(current);
           }
-          await this.users.reserveTokensInTransaction(tx, input.userId, input.reservedTokens);
+          await this.wallet.reserveTokensInTransaction(tx, input.userId, input.reservedTokens);
           const reservation = await tx.modelCallReservation.findUniqueOrThrow({ where: { id: existing.id } });
           return { state: "acquired", reservation };
         }
-        await this.users.reserveTokensInTransaction(tx, input.userId, input.reservedTokens);
+        await this.wallet.reserveTokensInTransaction(tx, input.userId, input.reservedTokens);
         const reservation = await tx.modelCallReservation.create({
           data: {
             requestKey: input.requestKey,
@@ -644,12 +646,7 @@ export class ModelsService {
         }
         throw new ConflictException("Model call reservation changed while it was being settled.");
       }
-      const charges: Array<{
-        amount: number;
-        kind: TokenTransactionKind;
-        note: string;
-        metadata: Prisma.InputJsonValue;
-      }> = [{
+      const charges: WalletCharge[] = [{
         amount: modelCharge,
         kind: reservation.purpose === ModelCallPurpose.CLOUD_CHAT || reservation.purpose === ModelCallPurpose.DISTILLATION
           ? TokenTransactionKind.CLOUD_MODEL_USAGE
@@ -665,14 +662,14 @@ export class ModelsService {
           metadata
         });
       }
-      const balanceAfter = await this.users.settleTokenReservationInTransaction(
+      const balanceAfter = await this.wallet.settleTokenReservationInTransaction(
         tx,
         reservation.userId,
         reservation.reservedTokens,
         charges
       );
       if (input.serviceFee > 0 && reservation.beneficiaryUserId && reservation.beneficiaryUserId !== reservation.userId) {
-          await this.users.creditTokensInTransaction(
+          await this.wallet.creditTokensInTransaction(
             tx,
             reservation.beneficiaryUserId,
             input.serviceFee,
@@ -730,7 +727,7 @@ export class ModelsService {
         }
       });
       if (!changed.count) return;
-      await this.users.releaseTokenReservationInTransaction(tx, reservation.userId, reservation.reservedTokens);
+      await this.wallet.releaseTokenReservationInTransaction(tx, reservation.userId, reservation.reservedTokens);
       await tx.modelCallLog.create({
         data: {
           userId: reservation.userId,
