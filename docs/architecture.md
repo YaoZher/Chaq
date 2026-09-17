@@ -42,6 +42,8 @@ Owner requests and Agent actions share the goal-update command, including comple
 
 `WalletService` owns balance mutations and ledger entries. It accepts the caller's active transaction and does not start or commit its own transaction. Model reservation/settlement and recharge-order state changes remain in the same transaction as their wallet changes. Authorization comes from `UserAccessService`; request/attempt idempotency remains with the model or order workflow. `UsersService` keeps its existing public methods as delegating entry points.
 
+Knowledge sources persist their original content before embedding starts so a failed initial index can be rebuilt. Embeddings are prepared before a transaction replaces all chunks; failed replacements retain the previous chunks. Rebuilds preserve the source, chunk positions, and content-derived billing request keys. Original content is excluded from API responses and summary queries. Sources created before the original-content migration rebuild from their existing chunks without joining their overlapping text; historical failed sources with neither original content nor chunks must be imported again. A failure to record the success event does not mark an already committed index as failed.
+
 ## Agent Run
 
 ```mermaid

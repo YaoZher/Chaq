@@ -779,7 +779,7 @@ function AgentMemoryPanel(props: { agent: AgentDetail; onChanged: () => void; on
     const nextErrors = { title: knowledgeTitle.trim() ? "" : "请填写知识标题。", content: knowledge.trim() ? "" : "请填写知识内容。" };
     setKnowledgeErrors(nextErrors);
     if (Object.values(nextErrors).some(Boolean)) return;
-    try { const result = await api.addAgentKnowledge(props.agent.id, { kind: "note", title: knowledgeTitle, content: knowledge }); setKnowledge(""); setKnowledgeTitle(""); setKnowledgeErrors({}); props.onNotice(`已索引 ${result.chunkCount} 个知识分块`); } catch (error) { props.onNotice(messageOf(error)); }
+    try { const result = await api.addAgentKnowledge(props.agent.id, { kind: "note", title: knowledgeTitle, content: knowledge }); setKnowledge(""); setKnowledgeTitle(""); setKnowledgeErrors({}); props.onNotice(`已索引 ${result.chunkCount} 个知识分块`); } catch (error) { props.onNotice(messageOf(error)); } finally { props.onChanged(); }
   }
   async function searchKnowledge(): Promise<void> {
     if (!ragQuery.trim()) {

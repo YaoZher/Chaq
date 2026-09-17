@@ -44,6 +44,20 @@ import {
 
 type AgentUpdate = Partial<AgentDraft> & { status?: "draft" | "active" | "paused" | "archived" };
 
+const knowledgeSourceSummarySelect = {
+  id: true,
+  agentId: true,
+  kind: true,
+  status: true,
+  title: true,
+  originUri: true,
+  summary: true,
+  error: true,
+  createdAt: true,
+  updatedAt: true,
+  _count: { select: { chunks: true } }
+} satisfies Prisma.AgentKnowledgeSourceSelect;
+
 @Injectable()
 export class AgentsService {
   constructor(
@@ -259,7 +273,7 @@ export class AgentsService {
       where: { id, ownerId: userId },
       include: {
         _count: { select: { goals: { where: { status: AgentGoalStatus.ACTIVE } } } },
-        knowledgeSources: { include: { _count: { select: { chunks: true } } }, orderBy: { updatedAt: "desc" }, take: 100 },
+        knowledgeSources: { select: knowledgeSourceSummarySelect, orderBy: { updatedAt: "desc" }, take: 100 },
         memories: { orderBy: [{ salience: "desc" }, { updatedAt: "desc" }], take: 50 },
         relationships: { orderBy: [{ affinity: "desc" }, { updatedAt: "desc" }], take: 100 },
         goals: { orderBy: [{ status: "asc" }, { priority: "desc" }], take: 100 },
@@ -710,7 +724,7 @@ export class AgentsService {
     const hash = createHash("sha256").update(input.content).digest("hex");
     const existing = await this.prisma.agentKnowledgeSource.findFirst({
       where: { agentId, contentHash: hash, status: KnowledgeSourceStatus.READY },
-      include: { _count: { select: { chunks: true } } }
+      select: knowledgeSourceSummarySelect
     });
     if (existing) return this.toKnowledgeSourceResponse(existing);
     const source = await this.prisma.agentKnowledgeSource.create({
@@ -721,18 +735,14 @@ export class AgentsService {
         title: input.title,
         originUri: input.originUri,
         contentHash: hash,
+        sourceContent: input.content,
         summary: input.content.slice(0, 500),
         metadata: input.metadata as Prisma.InputJsonValue | undefined
-      }
+      },
+      select: { id: true }
     });
     try {
       await this.indexKnowledgeChunks(userId, agentId, source.id, chunks);
-      const row = await this.prisma.agentKnowledgeSource.findUniqueOrThrow({
-        where: { id: source.id },
-        include: { _count: { select: { chunks: true } } }
-      });
-      await this.event(agentId, AgentEventKind.MEMORY, "Knowledge indexed", `${row.title}: ${row._count.chunks} chunks`);
-      return this.toKnowledgeSourceResponse(row);
     } catch (error) {
       await this.prisma.agentKnowledgeSource.update({
         where: { id: source.id },
@@ -743,29 +753,35 @@ export class AgentsService {
       }).catch(() => undefined);
       throw error;
     }
+    const row = await this.prisma.agentKnowledgeSource.findUniqueOrThrow({
+      where: { id: source.id },
+      select: knowledgeSourceSummarySelect
+    });
+    await this.event(agentId, AgentEventKind.MEMORY, "Knowledge indexed", `${row.title}: ${row._count.chunks} chunks`);
+    return this.toKnowledgeSourceResponse(row);
   }
 
   async reindexKnowledge(userId: string, agentId: string, sourceId: string) {
     await this.ownedAgent(userId, agentId);
     const source = await this.prisma.agentKnowledgeSource.findFirst({
       where: { id: sourceId, agentId },
-      include: { chunks: { orderBy: { position: "asc" } } }
+      select: {
+        sourceContent: true,
+        chunks: { select: { content: true }, orderBy: { position: "asc" } }
+      }
     });
     if (!source) throw new NotFoundException("Knowledge source not found.");
-    const chunks = source.chunks.map((chunk) => chunk.content).filter(Boolean);
-    if (!chunks.length) throw new BadRequestException("Knowledge source has no chunks to rebuild.");
+    // Legacy chunks overlap, so keep their boundaries when no original content was stored.
+    const chunks = source.sourceContent == null
+      ? source.chunks.map((chunk) => chunk.content).filter(Boolean)
+      : this.chunkText(source.sourceContent);
+    if (!chunks.length) throw new BadRequestException("Knowledge source has no content to rebuild. Import the source again.");
     await this.prisma.agentKnowledgeSource.update({
       where: { id: sourceId },
       data: { status: KnowledgeSourceStatus.PROCESSING, error: null }
     });
     try {
       await this.indexKnowledgeChunks(userId, agentId, sourceId, chunks);
-      const row = await this.prisma.agentKnowledgeSource.findUniqueOrThrow({
-        where: { id: sourceId },
-        include: { _count: { select: { chunks: true } } }
-      });
-      await this.event(agentId, AgentEventKind.MEMORY, "Knowledge reindexed", `${row.title}: ${row._count.chunks} chunks`);
-      return this.toKnowledgeSourceResponse(row);
     } catch (error) {
       await this.prisma.agentKnowledgeSource.update({
         where: { id: sourceId },
@@ -776,6 +792,12 @@ export class AgentsService {
       }).catch(() => undefined);
       throw error;
     }
+    const row = await this.prisma.agentKnowledgeSource.findUniqueOrThrow({
+      where: { id: sourceId },
+      select: knowledgeSourceSummarySelect
+    });
+    await this.event(agentId, AgentEventKind.MEMORY, "Knowledge reindexed", `${row.title}: ${row._count.chunks} chunks`);
+    return this.toKnowledgeSourceResponse(row);
   }
 
   async searchKnowledge(userId: string, agentId: string, input: { query: string; limit?: number }): Promise<AgentKnowledgeSearchResponse> {

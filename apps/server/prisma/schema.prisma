@@ -779,20 +779,21 @@ model AgentVersion {
 }
 
 model AgentKnowledgeSource {
-  id          String                @id @default(cuid())
-  agentId     String
-  agent       Agent                 @relation(fields: [agentId], references: [id], onDelete: Cascade)
-  kind        KnowledgeSourceKind
-  status      KnowledgeSourceStatus @default(PROCESSING)
-  title       String
-  originUri   String?
-  contentHash String?
-  summary     String                @default("")
-  error       String?
-  metadata    Json?
-  createdAt   DateTime              @default(now())
-  updatedAt   DateTime              @updatedAt
-  chunks      AgentKnowledgeChunk[]
+  id            String                @id @default(cuid())
+  agentId       String
+  agent         Agent                 @relation(fields: [agentId], references: [id], onDelete: Cascade)
+  kind          KnowledgeSourceKind
+  status        KnowledgeSourceStatus @default(PROCESSING)
+  title         String
+  originUri     String?
+  contentHash   String?
+  sourceContent String?
+  summary       String                @default("")
+  error         String?
+  metadata      Json?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+  chunks        AgentKnowledgeChunk[]
 
   @@index([agentId, status])
   @@index([contentHash])
