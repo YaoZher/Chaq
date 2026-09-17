@@ -45,6 +45,7 @@ import type {
 import { api, type LoginUser } from "../lib/api";
 import { LatestRequestGate, isSupersededRequest } from "../lib/latest-request";
 import { PendingMessageKey } from "../lib/message-idempotency";
+import { useConversationMessages } from "../lib/use-conversation-messages";
 import { AgentProfileView } from "./agent-profile";
 
 type AgentTab = "chat" | "identity" | "goals" | "memory" | "relationships" | "activity";
@@ -73,7 +74,9 @@ export function AgentWorkspace(props: {
   const [agent, setAgent] = useState<AgentDetail | null>(null);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ConversationMessage[]>([]);
+  const { messages, messageResource } = useConversationMessages((id) => {
+    void api.markConversationRead(id).catch(() => undefined);
+  });
   const [activity, setActivity] = useState<AgentEvent[]>([]);
   const [tab, setTab] = useState<AgentTab>("chat");
   const [composer, setComposer] = useState("");
@@ -123,11 +126,6 @@ export function AgentWorkspace(props: {
     const listener = (event: Event) => {
       const detail = (event as CustomEvent<{ type?: string; payload?: unknown }>).detail;
       if (detail?.type !== "conversation.message") return;
-      const message = detail.payload as Partial<ConversationMessage> | null;
-      if (message?.id && message.conversationId === conversationIdRef.current && typeof message.content === "string") {
-        setMessages((current) => current.some((item) => item.id === message.id) ? current : [...current, message as ConversationMessage]);
-        void api.markConversationRead(message.conversationId);
-      }
       void poll();
     };
     window.addEventListener("chaq:realtime", listener);
@@ -154,14 +152,15 @@ export function AgentWorkspace(props: {
     const activeConversationId = conversationIdRef.current;
     const resourceId = selectionResource(agentId, activeConversationId);
     const request = pollRequests.current.begin(resourceId);
+    const messageSelection = messageResource.current;
     try {
-      const [nextAgents, nextContacts, nextConversations, nextAgent, nextActivity, nextMessages] = await pollRequests.current.guard(request, Promise.all([
+      const [nextAgents, nextContacts, nextConversations, nextAgent, nextActivity] = await pollRequests.current.guard(request, Promise.all([
         api.agents(request.signal),
         api.agentContacts(request.signal),
         api.conversations(request.signal),
         agentId ? api.agent(agentId, request.signal) : Promise.resolve(null),
         agentId ? api.agentActivity(agentId, request.signal) : Promise.resolve(null),
-        activeConversationId ? api.conversationMessages(activeConversationId, request.signal) : Promise.resolve(null)
+        messageSelection ? messageResource.load(messageSelection, (signal) => api.conversationMessages(messageSelection.resourceId, signal)) : Promise.resolve()
       ]));
       if (!pollRequests.current.isCurrent(request, selectionResource(selectedAgentIdRef.current, conversationIdRef.current))) return;
       setAgents(nextAgents);
@@ -169,7 +168,6 @@ export function AgentWorkspace(props: {
       setConversations(nextConversations);
       if (nextAgent) setAgent(nextAgent);
       if (nextActivity) setActivity(nextActivity);
-      if (nextMessages) setMessages(nextMessages);
     } catch (error) {
       if (isSupersededRequest(error)) return;
       // Polling is best effort; foreground actions surface errors.
@@ -184,11 +182,11 @@ export function AgentWorkspace(props: {
     messageAttempt.current.clear();
     selectedAgentIdRef.current = id;
     conversationIdRef.current = null;
+    messageResource.select(null);
     setSelectedAgentId(id);
     setConversationId(null);
     setAgent(null);
     setActivity([]);
-    setMessages([]);
     setBusy(true);
     try {
       const [detail, conversation, events] = await selectionRequests.current.guard(request, Promise.all([
@@ -196,14 +194,16 @@ export function AgentWorkspace(props: {
         api.conversationWithAgent(id, request.signal),
         api.agentActivity(id, request.signal)
       ]));
-      const rows = await selectionRequests.current.guard(request, api.conversationMessages(conversation.id, request.signal));
+      if (!selectionRequests.current.isCurrent(request, resourceId) || selectedAgentIdRef.current !== id) return;
+      const messageSelection = messageResource.select(conversation.id)!;
+      conversationIdRef.current = conversation.id;
+      await selectionRequests.current.guard(request, messageResource.load(messageSelection, (signal) => api.conversationMessages(conversation.id, signal)));
       if (!selectionRequests.current.isCurrent(request, resourceId) || selectedAgentIdRef.current !== id) return;
       conversationIdRef.current = conversation.id;
       setAgent(detail);
       setConversationId(conversation.id);
       setActivity(events);
-      setMessages(rows);
-      void api.markConversationRead(conversation.id);
+      void api.markConversationRead(conversation.id).catch(() => undefined);
     } catch (error) {
       if (!isSupersededRequest(error) && selectionRequests.current.isCurrent(request, resourceId)) props.onNotice(messageOf(error));
     } finally {
@@ -227,26 +227,26 @@ export function AgentWorkspace(props: {
     messageAttempt.current.clear();
     selectedAgentIdRef.current = agentId;
     conversationIdRef.current = conversation.id;
+    messageResource.select(null);
+    const messageSelection = messageResource.select(conversation.id)!;
     setSelectedAgentId(agentId);
     setConversationId(conversation.id);
     setAgent(null);
     setActivity([]);
-    setMessages([]);
     setTab("chat");
     setBusy(true);
     try {
-      const [nextAgent, nextActivity, nextMessages] = await selectionRequests.current.guard(request, Promise.all([
+      const [nextAgent, nextActivity] = await selectionRequests.current.guard(request, Promise.all([
         agentId ? api.agent(agentId, request.signal) : Promise.resolve(null),
         agentId ? api.agentActivity(agentId, request.signal) : Promise.resolve([]),
-        api.conversationMessages(conversation.id, request.signal)
+        messageResource.load(messageSelection, (signal) => api.conversationMessages(conversation.id, signal))
       ]));
       if (!selectionRequests.current.isCurrent(request, resourceId)
         || conversationIdRef.current !== conversation.id
         || selectedAgentIdRef.current !== agentId) return;
       setAgent(nextAgent);
       setActivity(nextActivity);
-      setMessages(nextMessages);
-      void api.markConversationRead(conversation.id);
+      void api.markConversationRead(conversation.id).catch(() => undefined);
     } catch (error) {
       if (!isSupersededRequest(error) && selectionRequests.current.isCurrent(request, resourceId)) props.onNotice(messageOf(error));
     } finally {
@@ -257,7 +257,8 @@ export function AgentWorkspace(props: {
   async function sendMessage(event: FormEvent): Promise<void> {
     event.preventDefault();
     const targetConversationId = conversationIdRef.current;
-    if (!targetConversationId || !composer.trim() || busy) return;
+    const messageSelection = messageResource.current;
+    if (!targetConversationId || !messageSelection || !composer.trim() || busy) return;
     if (composer.length > CHAT_COMPOSER_MAX_LENGTH) {
       props.onNotice(`Message is too long. Keep it under ${CHAT_COMPOSER_MAX_LENGTH} characters.`);
       return;
@@ -273,7 +274,7 @@ export function AgentWorkspace(props: {
       const created = await sendRequests.current.guard(request, api.sendConversationMessage(targetConversationId, content, { idempotencyKey }, request.signal));
       messageAttempt.current.succeeded(idempotencyKey);
       if (!sendRequests.current.isCurrent(request, resourceId) || conversationIdRef.current !== targetConversationId) return;
-      setMessages((current) => current.some((item) => item.id === created.id) ? current : [...current, created]);
+      messageResource.receive(messageSelection, created);
       props.onNotice("消息已发送，Agent 正在思考");
     } catch (error) {
       if (isSupersededRequest(error)) return;

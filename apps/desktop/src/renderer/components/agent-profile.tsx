@@ -20,9 +20,11 @@ import {
   Users,
   X
 } from "lucide-react";
-import type { AgentPost, AgentProfile, ConversationMessage } from "@chaq/shared";
+import type { AgentPost, AgentProfile } from "@chaq/shared";
 import { api, type LoginUser } from "../lib/api";
+import { LatestRequestGate, isSupersededRequest, type LatestRequestToken } from "../lib/latest-request";
 import { PendingMessageKey } from "../lib/message-idempotency";
+import { useConversationMessages } from "../lib/use-conversation-messages";
 import defaultCoverUrl from "../assets/agent-profile-cover-v2.png";
 
 type ProfileTab = "posts" | "about" | "activity";
@@ -50,41 +52,79 @@ export function AgentProfileView(props: {
   const [mood, setMood] = useState("");
   const [chatOpen, setChatOpen] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ConversationMessage[]>([]);
+  const { messages, messageResource } = useConversationMessages((id) => {
+    if (chatOpen) void api.markConversationRead(id).catch(() => undefined);
+  });
   const [chatComposer, setChatComposer] = useState("");
   const [chatSending, setChatSending] = useState(false);
   const messageAttempt = useRef(new PendingMessageKey());
+  const profileSelections = useRef(new LatestRequestGate());
+  const profileSelection = useRef<LatestRequestToken | null>(null);
+  const profileRequests = useRef(new LatestRequestGate());
+  const openChatRequests = useRef(new LatestRequestGate());
+  const sendRequests = useRef(new LatestRequestGate());
+  const initialProfileLoading = useRef(true);
 
   const thinking = profile?.agent.presence === "thinking";
   const displayCover = profile?.agent.coverUrl || defaultCoverUrl;
 
   useEffect(() => {
+    profileSelection.current = profileSelections.current.begin(props.agentId);
+    initialProfileLoading.current = true;
+    setProfile(null);
+    resetChat();
     void loadProfile(true);
+    return () => {
+      profileSelections.current.cancel();
+      profileRequests.current.cancel();
+      openChatRequests.current.cancel();
+      sendRequests.current.cancel();
+      messageResource.select(null);
+    };
   }, [props.agentId]);
 
   useEffect(() => {
     const timer = setInterval(() => {
-      void loadProfile(false);
-      if (conversationId) void api.conversationMessages(conversationId).then(setMessages).catch(() => undefined);
+      if (!initialProfileLoading.current) void loadProfile(false);
+      const selection = messageResource.current;
+      if (selection) void messageResource.load(selection, (signal) => api.conversationMessages(selection.resourceId, signal)).catch(() => undefined);
     }, 3_000);
     return () => clearInterval(timer);
   }, [props.agentId, conversationId]);
 
   async function loadProfile(showLoading: boolean): Promise<void> {
+    const selection = profileSelection.current;
+    if (!selection || selection.resourceId !== props.agentId || !profileSelections.current.isCurrent(selection)) return;
+    const request = profileRequests.current.begin(selection.resourceId);
     if (showLoading) setLoading(true);
     try {
-      const next = await api.agentProfile(props.agentId);
+      const next = await profileRequests.current.guard(request, api.agentProfile(selection.resourceId));
+      if (!profileSelections.current.isCurrent(selection) || !profileRequests.current.isCurrent(request)) return;
       setProfile(next);
       if (showLoading) {
         setProfileStatus(next.agent.profileStatus);
         setMood(next.agent.mood);
-        if (props.initialChatOpen && (next.isOwner || next.isContact)) await openChatFor(next);
+        if (props.initialChatOpen && (next.isOwner || next.isContact)) await openChatFor(next, selection);
       }
     } catch (error) {
-      props.onNotice(messageOf(error));
+      if (!isSupersededRequest(error) && profileSelections.current.isCurrent(selection)) props.onNotice(messageOf(error));
     } finally {
-      if (showLoading) setLoading(false);
+      if (showLoading && profileSelections.current.isCurrent(selection)) {
+        initialProfileLoading.current = false;
+        setLoading(false);
+      }
     }
+  }
+
+  function resetChat(): void {
+    openChatRequests.current.cancel();
+    sendRequests.current.cancel();
+    messageResource.select(null);
+    messageAttempt.current.clear();
+    setConversationId(null);
+    setChatOpen(false);
+    setChatComposer("");
+    setChatSending(false);
   }
 
   async function choosePostImage(): Promise<void> {
@@ -190,28 +230,36 @@ export function AgentProfileView(props: {
     await openChatFor(profile);
   }
 
-  async function openChatFor(target: AgentProfile): Promise<void> {
+  async function openChatFor(target: AgentProfile, selection = profileSelection.current): Promise<void> {
+    if (!selection || selection.resourceId !== target.agent.id || !profileSelections.current.isCurrent(selection)) return;
+    const request = openChatRequests.current.begin(target.agent.id);
     try {
-      const conversation = await api.conversationWithAgent(target.agent.id);
+      const conversation = await openChatRequests.current.guard(request, api.conversationWithAgent(target.agent.id, request.signal));
+      if (!profileSelections.current.isCurrent(selection) || !openChatRequests.current.isCurrent(request)) return;
+      const messageSelection = messageResource.select(conversation.id)!;
       setConversationId(conversation.id);
-      setMessages(await api.conversationMessages(conversation.id));
+      await openChatRequests.current.guard(request, messageResource.load(messageSelection, (signal) => api.conversationMessages(conversation.id, signal)));
+      if (!profileSelections.current.isCurrent(selection) || !openChatRequests.current.isCurrent(request)) return;
       setChatOpen(true);
-      void api.markConversationRead(conversation.id);
+      void api.markConversationRead(conversation.id).catch(() => undefined);
     } catch (error) {
-      props.onNotice(messageOf(error));
+      if (!isSupersededRequest(error) && profileSelections.current.isCurrent(selection)) props.onNotice(messageOf(error));
     }
   }
 
   async function toggleContact(): Promise<void> {
     if (!profile || profile.isOwner) return;
+    const selection = profileSelection.current;
+    if (!selection) return;
     try {
       if (profile.isContact) {
         await api.removeAgentContact(profile.agent.id);
-        setChatOpen(false);
-        setConversationId(null);
+        if (!profileSelections.current.isCurrent(selection)) return;
+        resetChat();
         props.onNotice(`已从联系人移除 ${profile.agent.name}`);
       } else {
         await api.addAgentContact(profile.agent.id);
+        if (!profileSelections.current.isCurrent(selection)) return;
         props.onNotice(`已添加 ${profile.agent.name} 为好友`);
       }
       await loadProfile(false);
@@ -235,20 +283,24 @@ export function AgentProfileView(props: {
 
   async function sendChat(event: FormEvent): Promise<void> {
     event.preventDefault();
-    if (!conversationId || !chatComposer.trim() || chatSending) return;
+    const selection = messageResource.current;
+    if (!selection || !chatComposer.trim() || chatSending) return;
+    const request = sendRequests.current.begin(selection.resourceId);
     const content = chatComposer.trim();
-    const idempotencyKey = messageAttempt.current.begin(conversationId, content);
+    const idempotencyKey = messageAttempt.current.begin(selection.resourceId, content);
     setChatComposer("");
     setChatSending(true);
     try {
-      const message = await api.sendConversationMessage(conversationId, content, { idempotencyKey });
+      const message = await sendRequests.current.guard(request, api.sendConversationMessage(selection.resourceId, content, { idempotencyKey }, request.signal));
+      if (!messageResource.isCurrent(selection) || !sendRequests.current.isCurrent(request)) return;
       messageAttempt.current.succeeded(idempotencyKey);
-      setMessages((current) => [...current, message]);
+      messageResource.receive(selection, message);
     } catch (error) {
+      if (isSupersededRequest(error) || !messageResource.isCurrent(selection) || !sendRequests.current.isCurrent(request)) return;
       setChatComposer((current) => current.trim() ? current : content);
       props.onNotice(messageOf(error));
     } finally {
-      setChatSending(false);
+      if (messageResource.isCurrent(selection) && sendRequests.current.isCurrent(request)) setChatSending(false);
     }
   }
 
