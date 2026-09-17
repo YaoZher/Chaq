@@ -72,19 +72,29 @@ import { api, ApiError, connectRealtime, type LoginUser, type UserSettings } fro
 import { heuristicDraftFromMessages, parseImport } from "./lib/importParser";
 import { LatestRequestGate, isSupersededRequest } from "./lib/latest-request";
 import { PendingMessageKey } from "./lib/message-idempotency";
-import { providerKinds, userModelPresets } from "./lib/provider-presets";
+import { userModelPresets } from "./lib/provider-presets";
 import { MagneticButton, ShinyText, SpotlightCard } from "./components/react-bits";
 import { AgentWorkspace } from "./components/agent-workspace";
 import coverUrl from "./assets/chaq-cover-v2.png";
 import defaultAvatarUrl from "./assets/chaq-default-avatar-v2.png";
 import loginBgUrl from "./assets/chaq-login-bg-v2.png";
+import { ModelForm, AdminProviderForm } from "./components/model-forms";
+import { FormField, FieldError } from "./components/form-field";
+import {
+  validateLoginFields, validateRegisterFields, validateEmailField,
+  validateProfileFields, validateSkillDraft, validateUserModelFields,
+  normalizeUserModelForm, validateAdminProviderFields,
+  hasFieldErrors, clearFieldError, fieldClass,
+  type UserModelFormState, type UserModelTestStatus, type FieldErrors,
+  type ProfileFormState, type SkillKind, type AdminProviderFormState
+} from "./lib/form-validation";
 import "./styles.css";
 
 type View = "agents" | "chat" | "skill-editor" | "import" | "market" | "wallet" | "models" | "admin" | "settings";
 type ModelMode = "cloud" | "user";
 type SkillEditorTab = "profile" | "edit" | "share" | "more";
 type SettingsCategory = "general" | "appearance" | "messages" | "storage" | "display";
-type SkillKind = "friend" | "expert" | "partner" | "custom";
+
 type LoginMode = "login" | "register";
 type RechargeUnit = "token" | "k" | "m";
 type ServerStatus = "checking" | "online" | "offline";
@@ -95,29 +105,6 @@ type NoticeToastState = {
   message: string;
   tone: NoticeTone;
   visible: boolean;
-};
-type UserModelFormState = {
-  id: string;
-  kind: ProviderKind;
-  name: string;
-  baseUrl: string;
-  apiKey: string;
-  defaultModel: string;
-  embeddingModel: string;
-};
-type UserModelTestStatus = {
-  state: "idle" | "testing" | "ok" | "error";
-  message: string;
-};
-type FieldErrors = Record<string, string>;
-type ProfileFormState = {
-  displayName: string;
-  avatarUrl: string;
-  email: string;
-  emailCode: string;
-  currentPassword: string;
-  newPassword: string;
-  confirmPassword: string;
 };
 
 type RememberedAccount = {
@@ -281,9 +268,9 @@ function App(): JSX.Element {
   });
   const [userModelStatus, setUserModelStatus] = useState<UserModelTestStatus>({ state: "idle", message: "" });
   const [userModelErrors, setUserModelErrors] = useState<FieldErrors>({});
-  const [providerForm, setProviderForm] = useState({
+  const [providerForm, setProviderForm] = useState<AdminProviderFormState>({
     id: "",
-    kind: "openai" as ProviderKind,
+    kind: "openai",
     name: userModelPresets.openai.name,
     baseUrl: userModelPresets.openai.baseUrl,
     apiKey: "",
@@ -1998,7 +1985,7 @@ function App(): JSX.Element {
               subtitle="模型参数上传服务器并加密保存，仅当前账号及其私有 Agent 可以使用。"
             >
               <div className="split-tools">
-                <CleanModelForm
+                <ModelForm
                   form={userModelForm}
                   setForm={setUserModelForm}
                   onKindChange={applyUserModelPreset}
@@ -2052,7 +2039,7 @@ function App(): JSX.Element {
           {view === "admin" && isAdmin && (
             <ToolPage title="管理员后台" subtitle="管理平台云模型供应商、Agent 举报审核和公开内容风险。">
               <div className="admin-console-grid">
-                <CleanAdminProviderForm form={providerForm} setForm={setProviderForm} onKindChange={applyAdminProviderPreset} onSave={() => void saveAdminProvider()} errors={adminProviderErrors} clearError={(key) => setAdminProviderErrors((current) => clearFieldError(current, key))} />
+                <AdminProviderForm form={providerForm} setForm={setProviderForm} onKindChange={applyAdminProviderPreset} onSave={() => void saveAdminProvider()} errors={adminProviderErrors} clearError={(key) => setAdminProviderErrors((current) => clearFieldError(current, key))} />
                 <div className="panel admin-list-panel">
                   <div className="panel-title-row">
                     <h3>平台云模型</h3>
@@ -3024,187 +3011,6 @@ function SkillInspector({ draft, setDraft, save, busy }: { draft: SkillDraft; se
   );
 }
 
-function FormField(props: { label: string; error?: string; hint?: string; className?: string; children: React.ReactNode }): JSX.Element {
-  return <label className={["form-field", props.error ? "has-field-error" : "", props.className ?? ""].filter(Boolean).join(" ")}>
-    <span className="form-field-label">{props.label}</span>
-    {props.children}
-    {props.error ? <FieldError message={props.error} /> : props.hint ? <small className="form-field-hint">{props.hint}</small> : null}
-  </label>;
-}
-
-function FieldError({ message }: { message?: string }): JSX.Element | null {
-  return message ? <small className="field-error" role="alert"><AlertCircle size={13} />{message}</small> : null;
-}
-
-function CleanModelForm(props: {
-  form: UserModelFormState;
-  setForm: (form: UserModelFormState) => void;
-  onKindChange: (kind: ProviderKind) => void;
-  onTest: () => void;
-  onSave: () => void;
-  onReset: () => void;
-  status: UserModelTestStatus;
-  errors: FieldErrors;
-  clearError: (key: string) => void;
-}): JSX.Element {
-  const { form, setForm } = props;
-  const preset = userModelPresets[form.kind];
-  const update = <K extends keyof UserModelFormState>(key: K, value: UserModelFormState[K]) => {
-    setForm({ ...form, [key]: value });
-    props.clearError(key);
-  };
-  return (
-    <div className="panel form-panel">
-      <div className="panel-title-row">
-        <h3>{form.id ? "编辑自己的模型" : "添加自己的模型"}</h3>
-        <button type="button" onClick={props.onReset}><Plus size={16} />新建</button>
-      </div>
-      <FormField label="模型厂商">
-        <select value={form.kind} onChange={(event) => props.onKindChange(event.target.value as ProviderKind)}>
-          {providerKinds.filter((kind) => kind !== "ollama").map((kind) => <option key={kind} value={kind}>{userModelPresets[kind].name}</option>)}
-        </select>
-      </FormField>
-      {form.kind === "custom" ? (
-        <FormField label="API 接口地址" error={props.errors.baseUrl} hint="填写兼容 OpenAI Chat Completions 的 HTTPS 根地址。">
-          <input aria-invalid={Boolean(props.errors.baseUrl)} value={form.baseUrl} onChange={(event) => update("baseUrl", event.target.value)} placeholder="https://api.example.com/v1" />
-        </FormField>
-      ) : (
-        <div className="model-endpoint-summary"><ShieldCheck size={17} /><span><strong>{preset.name} 官方接口</strong><small>{preset.baseUrl}</small></span></div>
-      )}
-      <FormField label="模型 ID" error={props.errors.defaultModel} hint={preset.defaultModel ? `已预填推荐模型 ${preset.defaultModel}，也可以改成账号实际可用的模型。` : "填写服务商提供的模型标识。"}>
-        <input aria-invalid={Boolean(props.errors.defaultModel)} value={form.defaultModel} onChange={(event) => update("defaultModel", event.target.value)} placeholder="例如：deepseek-chat" />
-      </FormField>
-      <FormField label="Embedding 模型（可选）" error={props.errors.embeddingModel} hint="用于 Agent 知识库向量检索。留空时自动回退本地向量。">
-        <input aria-invalid={Boolean(props.errors.embeddingModel)} value={form.embeddingModel} onChange={(event) => update("embeddingModel", event.target.value)} placeholder={preset.embeddingModel || "例如：text-embedding-3-small"} />
-      </FormField>
-      <FormField label={form.id ? "API Key（留空则继续使用已保存密钥）" : "API Key"} error={props.errors.apiKey} hint="只上传到服务器加密保存，客户端不会回显。">
-        <input aria-invalid={Boolean(props.errors.apiKey)} type="password" value={form.apiKey} onChange={(event) => update("apiKey", event.target.value)} placeholder={form.id ? "无需更换可留空" : "请输入厂商提供的 API Key"} />
-      </FormField>
-      <details className="model-advanced-fields">
-        <summary>高级设置</summary>
-        <FormField label="连接名称（可选）" error={props.errors.name} hint="仅用于区分你保存的多个连接。">
-          <input aria-invalid={Boolean(props.errors.name)} value={form.name} onChange={(event) => update("name", event.target.value)} placeholder={`${preset.name} 私有连接`} />
-        </FormField>
-      </details>
-      <div className="model-form-actions">
-        <button type="button" onClick={props.onTest} disabled={props.status.state === "testing"}><ShieldCheck size={16} />云端检测</button>
-        <button className="primary-button" onClick={props.onSave}><Save size={16} />保存模型</button>
-      </div>
-      {props.status.message && <div className={`model-test-status ${props.status.state}`}>{props.status.message}</div>}
-    </div>
-  );
-}
-
-function CleanAdminProviderForm({ form, setForm, onKindChange, onSave, errors, clearError }: { form: any; setForm: (form: any) => void; onKindChange: (kind: ProviderKind) => void; onSave: () => void; errors: FieldErrors; clearError: (key: string) => void }): JSX.Element {
-  const update = (key: string, value: string | number | boolean) => {
-    setForm({ ...form, [key]: value });
-    clearError(key);
-  };
-  return (
-    <div className="panel form-panel">
-      <h3>平台云模型</h3>
-      <FormField label="模型厂商">
-        <select value={form.kind} onChange={(event) => onKindChange(event.target.value as ProviderKind)}>
-          {providerKinds.map((kind) => <option key={kind} value={kind}>{userModelPresets[kind].name}</option>)}
-        </select>
-      </FormField>
-      <FormField label="供应商名称" error={errors.name}><input aria-invalid={Boolean(errors.name)} value={form.name} onChange={(event) => update("name", event.target.value)} /></FormField>
-      <FormField label="API 接口地址" error={errors.baseUrl}><input aria-invalid={Boolean(errors.baseUrl)} value={form.baseUrl} onChange={(event) => update("baseUrl", event.target.value)} placeholder="https://api.example.com/v1" /></FormField>
-      <FormField label={form.id ? "API Key（留空保留原密钥）" : "API Key"} error={errors.apiKey}><input aria-invalid={Boolean(errors.apiKey)} type="password" value={form.apiKey} onChange={(event) => update("apiKey", event.target.value)} /></FormField>
-      <div className="form-grid-two">
-        <FormField label="模型 ID" error={errors.modelId}><input aria-invalid={Boolean(errors.modelId)} value={form.modelId} onChange={(event) => update("modelId", event.target.value)} /></FormField>
-        <FormField label="模型显示名" error={errors.modelLabel}><input aria-invalid={Boolean(errors.modelLabel)} value={form.modelLabel} onChange={(event) => update("modelLabel", event.target.value)} /></FormField>
-        <FormField label="Embedding 模型" error={errors.embeddingModel}><input aria-invalid={Boolean(errors.embeddingModel)} value={form.embeddingModel} onChange={(event) => update("embeddingModel", event.target.value)} placeholder="可留空" /></FormField>
-        <FormField label="上下文窗口" error={errors.contextWindow}><input aria-invalid={Boolean(errors.contextWindow)} type="number" min="1" value={form.contextWindow} onChange={(event) => update("contextWindow", Number(event.target.value))} /></FormField>
-        <FormField label="输入 Token 单价" error={errors.promptTokenPrice}><input aria-invalid={Boolean(errors.promptTokenPrice)} type="number" min="0" step="0.001" value={form.promptTokenPrice} onChange={(event) => update("promptTokenPrice", Number(event.target.value))} /></FormField>
-        <FormField label="输出 Token 单价" error={errors.completionTokenPrice}><input aria-invalid={Boolean(errors.completionTokenPrice)} type="number" min="0" step="0.001" value={form.completionTokenPrice} onChange={(event) => update("completionTokenPrice", Number(event.target.value))} /></FormField>
-        <FormField label="Embedding Token 单价" error={errors.embeddingTokenPrice}><input aria-invalid={Boolean(errors.embeddingTokenPrice)} type="number" min="0" step="0.001" value={form.embeddingTokenPrice} onChange={(event) => update("embeddingTokenPrice", Number(event.target.value))} /></FormField>
-      </div>
-      <button onClick={onSave}><Save size={16} />保存供应商</button>
-    </div>
-  );
-}
-
-function ModelForm(props: {
-  form: UserModelFormState;
-  setForm: (form: UserModelFormState) => void;
-  onKindChange: (kind: ProviderKind) => void;
-  onTest: () => void;
-  onSave: () => void;
-  onReset: () => void;
-  status: UserModelTestStatus;
-  errors: FieldErrors;
-  clearError: (key: string) => void;
-}): JSX.Element {
-  const { form, setForm } = props;
-  const preset = userModelPresets[form.kind];
-  const update = <K extends keyof UserModelFormState>(key: K, value: UserModelFormState[K]) => {
-    setForm({ ...form, [key]: value });
-    props.clearError(key);
-  };
-  return (
-    <div className="panel form-panel">
-      <div className="panel-title-row">
-        <h3>{form.id ? "编辑自己的模型" : "添加自己的模型"}</h3>
-        <button type="button" onClick={props.onReset}><Plus size={16} />新建</button>
-      </div>
-      <FormField label="模型厂商">
-        <select value={form.kind} onChange={(event) => props.onKindChange(event.target.value as ProviderKind)}>
-          {providerKinds.filter((kind) => kind !== "ollama").map((kind) => <option key={kind} value={kind}>{userModelPresets[kind].name}</option>)}
-        </select>
-      </FormField>
-      {form.kind === "custom" ? (
-        <FormField label="API 接口地址" error={props.errors.baseUrl} hint="填写兼容 OpenAI Chat Completions 的 HTTPS 根地址。">
-          <input aria-invalid={Boolean(props.errors.baseUrl)} value={form.baseUrl} onChange={(event) => update("baseUrl", event.target.value)} placeholder="https://api.example.com/v1" />
-        </FormField>
-      ) : (
-        <div className="model-endpoint-summary"><ShieldCheck size={17} /><span><strong>{preset.name} 官方接口</strong><small>{preset.baseUrl}</small></span></div>
-      )}
-      <FormField label="模型 ID" error={props.errors.defaultModel} hint={preset.defaultModel ? `已预填推荐模型 ${preset.defaultModel}，也可以改成账号实际可用的模型。` : "填写服务商提供的模型标识。"}>
-        <input aria-invalid={Boolean(props.errors.defaultModel)} value={form.defaultModel} onChange={(event) => update("defaultModel", event.target.value)} placeholder="例如：deepseek-chat" />
-      </FormField>
-      <FormField label={form.id ? "API Key（留空则继续使用已保存密钥）" : "API Key"} error={props.errors.apiKey} hint="只上传到服务器加密保存，客户端不会回显。">
-        <input aria-invalid={Boolean(props.errors.apiKey)} type="password" value={form.apiKey} onChange={(event) => update("apiKey", event.target.value)} placeholder={form.id ? "无需更换可留空" : "请输入厂商提供的 API Key"} />
-      </FormField>
-      <details className="model-advanced-fields">
-        <summary>高级设置</summary>
-        <FormField label="连接名称（可选）" error={props.errors.name} hint="仅用于区分你保存的多个连接。">
-          <input aria-invalid={Boolean(props.errors.name)} value={form.name} onChange={(event) => update("name", event.target.value)} placeholder={`${preset.name} 私有连接`} />
-        </FormField>
-      </details>
-      <div className="model-form-actions">
-        <button type="button" onClick={props.onTest} disabled={props.status.state === "testing"}><ShieldCheck size={16} />云端检测</button>
-        <button className="primary-button" onClick={props.onSave}><Save size={16} />保存模型</button>
-      </div>
-      {props.status.message && <div className={`model-test-status ${props.status.state}`}>{props.status.message}</div>}
-    </div>
-  );
-}
-
-function AdminProviderForm({ form, setForm, onKindChange, onSave, errors, clearError }: { form: any; setForm: (form: any) => void; onKindChange: (kind: ProviderKind) => void; onSave: () => void; errors: FieldErrors; clearError: (key: string) => void }): JSX.Element {
-  const update = (key: string, value: string | number | boolean) => {
-    setForm({ ...form, [key]: value });
-    clearError(key);
-  };
-  return (
-    <div className="panel form-panel">
-      <h3>平台云模型</h3>
-      <FormField label="模型厂商"><select value={form.kind} onChange={(event) => onKindChange(event.target.value as ProviderKind)}>{providerKinds.map((kind) => <option key={kind} value={kind}>{userModelPresets[kind].name}</option>)}</select></FormField>
-      <FormField label="供应商名称" error={errors.name}><input aria-invalid={Boolean(errors.name)} value={form.name} onChange={(event) => update("name", event.target.value)} /></FormField>
-      <FormField label="API 接口地址" error={errors.baseUrl}><input aria-invalid={Boolean(errors.baseUrl)} value={form.baseUrl} onChange={(event) => update("baseUrl", event.target.value)} placeholder="https://api.example.com/v1" /></FormField>
-      <FormField label={form.id ? "API Key（留空保留原密钥）" : "API Key"} error={errors.apiKey}><input aria-invalid={Boolean(errors.apiKey)} type="password" value={form.apiKey} onChange={(event) => update("apiKey", event.target.value)} /></FormField>
-      <div className="form-grid-two">
-        <FormField label="模型 ID" error={errors.modelId}><input aria-invalid={Boolean(errors.modelId)} value={form.modelId} onChange={(event) => update("modelId", event.target.value)} /></FormField>
-        <FormField label="模型显示名" error={errors.modelLabel}><input aria-invalid={Boolean(errors.modelLabel)} value={form.modelLabel} onChange={(event) => update("modelLabel", event.target.value)} /></FormField>
-        <FormField label="上下文窗口" error={errors.contextWindow}><input aria-invalid={Boolean(errors.contextWindow)} type="number" min="1" value={form.contextWindow} onChange={(event) => update("contextWindow", Number(event.target.value))} /></FormField>
-        <FormField label="输入 Token 单价" error={errors.promptTokenPrice}><input aria-invalid={Boolean(errors.promptTokenPrice)} type="number" min="0" step="0.001" value={form.promptTokenPrice} onChange={(event) => update("promptTokenPrice", Number(event.target.value))} /></FormField>
-        <FormField label="输出 Token 单价" error={errors.completionTokenPrice}><input aria-invalid={Boolean(errors.completionTokenPrice)} type="number" min="0" step="0.001" value={form.completionTokenPrice} onChange={(event) => update("completionTokenPrice", Number(event.target.value))} /></FormField>
-      </div>
-      <button onClick={onSave}><Save size={16} />保存供应商</button>
-    </div>
-  );
-}
-
 function SettingRange(props: {
   label: string;
   value: number;
@@ -3240,229 +3046,7 @@ function SettingRange(props: {
   );
 }
 
-function validateLoginFields(form: { username: string; password: string }): FieldErrors {
-  return validateLoginFieldsClean(form);
-  return {
-    username: form.username.trim() ? "" : "请输入邮箱或账号。",
-    password: form.password ? "" : "请输入密码。"
-  };
-}
-
-function validateRegisterFields(form: { email: string; code: string; password: string; confirmPassword: string }): FieldErrors {
-  return validateRegisterFieldsClean(form);
-  const passwordError = !form.password
-    ? "请输入密码。"
-    : form.password.length < 8 || form.password.length > 64 || !/[A-Za-z]/.test(form.password) || !/\d/.test(form.password)
-      ? "密码需为 8-64 位，并同时包含字母和数字。"
-      : "";
-  return {
-    email: validateEmailField(form.email),
-    code: form.code.trim() ? "" : "请输入邮箱验证码。",
-    password: passwordError,
-    confirmPassword: !form.confirmPassword ? "请再次输入密码。" : form.confirmPassword === form.password ? "" : "两次输入的密码不一致。"
-  };
-}
-
-function validateEmailField(value: string): string {
-  return validateEmailFieldClean(value);
-  const email = value.trim();
-  if (!email) return "请输入邮箱地址。";
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? "" : "邮箱格式不正确。";
-}
-
-function validateUserModelFields(form: UserModelFormState): FieldErrors {
-  return validateUserModelFieldsClean(form);
-  const errors: FieldErrors = {};
-  if (!form.defaultModel.trim()) errors.defaultModel = "请输入模型 ID。";
-  else if (form.defaultModel.trim().length > 160) errors.defaultModel = "模型 ID 不能超过 160 个字符。";
-  if (form.kind === "custom") {
-    if (!form.baseUrl.trim()) errors.baseUrl = "请输入 API 接口地址。";
-    else if (!isValidHttpUrl(form.baseUrl, true)) errors.baseUrl = "请输入有效的 HTTPS 地址。";
-  }
-  if (!form.id && !form.apiKey.trim()) errors.apiKey = "请输入 API Key。";
-  if (form.apiKey.length > 5000) errors.apiKey = "API Key 长度异常，请检查后重试。";
-  if (form.name.trim().length > 80) errors.name = "连接名称不能超过 80 个字符。";
-  return errors;
-}
-
-function normalizeUserModelForm(form: UserModelFormState): UserModelFormState {
-  return normalizeUserModelFormClean(form);
-  const preset = userModelPresets[form.kind];
-  const defaultModel = form.defaultModel.trim();
-  return {
-    ...form,
-    name: form.name.trim() || (form.kind === "custom" ? `自定义 · ${defaultModel}` : `${preset.name} 私有连接`),
-    baseUrl: form.kind === "custom" ? form.baseUrl.trim().replace(/\/$/, "") : preset.baseUrl,
-    apiKey: form.apiKey.trim(),
-    defaultModel
-  };
-}
-
-function validateAdminProviderFields(form: any): FieldErrors {
-  return validateAdminProviderFieldsClean(form);
-  const errors: FieldErrors = {};
-  if (!String(form.name ?? "").trim()) errors.name = "请输入供应商名称。";
-  if (!String(form.baseUrl ?? "").trim()) errors.baseUrl = "请输入 API 接口地址。";
-  else if (!isValidHttpUrl(String(form.baseUrl), false)) errors.baseUrl = "请输入有效的 HTTP 或 HTTPS 地址。";
-  if (!form.id && form.kind !== "ollama" && !String(form.apiKey ?? "").trim()) errors.apiKey = "请输入 API Key。";
-  if (!String(form.modelId ?? "").trim()) errors.modelId = "请输入模型 ID。";
-  if (!String(form.modelLabel ?? "").trim()) errors.modelLabel = "请输入模型显示名。";
-  if (!Number.isFinite(Number(form.contextWindow)) || Number(form.contextWindow) <= 0) errors.contextWindow = "上下文窗口必须大于 0。";
-  if (!Number.isFinite(Number(form.promptTokenPrice)) || Number(form.promptTokenPrice) < 0) errors.promptTokenPrice = "单价不能小于 0。";
-  if (!Number.isFinite(Number(form.completionTokenPrice)) || Number(form.completionTokenPrice) < 0) errors.completionTokenPrice = "单价不能小于 0。";
-  return errors;
-}
-
-function validateUserModelFieldsClean(form: UserModelFormState): FieldErrors {
-  const errors: FieldErrors = {};
-  if (!form.defaultModel.trim()) errors.defaultModel = "请输入模型 ID。";
-  else if (form.defaultModel.trim().length > 160) errors.defaultModel = "模型 ID 不能超过 160 个字符。";
-  if (form.embeddingModel.trim().length > 160) errors.embeddingModel = "Embedding 模型不能超过 160 个字符。";
-  if (form.kind === "custom") {
-    if (!form.baseUrl.trim()) errors.baseUrl = "请输入 API 接口地址。";
-    else if (!isValidHttpUrl(form.baseUrl, true)) errors.baseUrl = "请输入有效的 HTTPS 地址。";
-  }
-  if (!form.id && !form.apiKey.trim()) errors.apiKey = "请输入 API Key。";
-  if (form.apiKey.length > 5000) errors.apiKey = "API Key 长度异常，请检查后重试。";
-  if (form.name.trim().length > 80) errors.name = "连接名称不能超过 80 个字符。";
-  return errors;
-}
-
-function normalizeUserModelFormClean(form: UserModelFormState): UserModelFormState {
-  const preset = userModelPresets[form.kind];
-  const defaultModel = form.defaultModel.trim();
-  return {
-    ...form,
-    name: form.name.trim() || (form.kind === "custom" ? `自定义 · ${defaultModel}` : `${preset.name} 私有连接`),
-    baseUrl: form.kind === "custom" ? form.baseUrl.trim().replace(/\/$/, "") : preset.baseUrl,
-    apiKey: form.apiKey.trim(),
-    defaultModel,
-    embeddingModel: form.embeddingModel.trim()
-  };
-}
-
-function validateAdminProviderFieldsClean(form: any): FieldErrors {
-  const errors: FieldErrors = {};
-  if (!String(form.name ?? "").trim()) errors.name = "请输入供应商名称。";
-  if (!String(form.baseUrl ?? "").trim()) errors.baseUrl = "请输入 API 接口地址。";
-  else if (!isValidHttpUrl(String(form.baseUrl), false)) errors.baseUrl = "请输入有效的 HTTP 或 HTTPS 地址。";
-  if (!form.id && form.kind !== "ollama" && !String(form.apiKey ?? "").trim()) errors.apiKey = "请输入 API Key。";
-  if (!String(form.modelId ?? "").trim()) errors.modelId = "请输入模型 ID。";
-  if (!String(form.modelLabel ?? "").trim()) errors.modelLabel = "请输入模型显示名。";
-  if (String(form.embeddingModel ?? "").trim().length > 160) errors.embeddingModel = "Embedding 模型不能超过 160 个字符。";
-  if (!Number.isFinite(Number(form.contextWindow)) || Number(form.contextWindow) <= 0) errors.contextWindow = "上下文窗口必须大于 0。";
-  if (!Number.isFinite(Number(form.promptTokenPrice)) || Number(form.promptTokenPrice) < 0) errors.promptTokenPrice = "单价不能小于 0。";
-  if (!Number.isFinite(Number(form.completionTokenPrice)) || Number(form.completionTokenPrice) < 0) errors.completionTokenPrice = "单价不能小于 0。";
-  if (!Number.isFinite(Number(form.embeddingTokenPrice)) || Number(form.embeddingTokenPrice) < 0) errors.embeddingTokenPrice = "单价不能小于 0。";
-  return errors;
-}
-
-function validateLoginFieldsClean(form: { username: string; password: string }): FieldErrors {
-  return {
-    username: form.username.trim() ? "" : "请输入邮箱或账号。",
-    password: form.password ? "" : "请输入密码。"
-  };
-}
-
-function validateRegisterFieldsClean(form: { email: string; code: string; password: string; confirmPassword: string }): FieldErrors {
-  const passwordError = !form.password
-    ? "请输入密码。"
-    : form.password.length < 8 || form.password.length > 64 || !/[A-Za-z]/.test(form.password) || !/\d/.test(form.password)
-      ? "密码需要 8-64 位，并同时包含字母和数字。"
-      : "";
-  return {
-    email: validateEmailFieldClean(form.email),
-    code: form.code.trim() ? "" : "请输入邮箱验证码。",
-    password: passwordError,
-    confirmPassword: !form.confirmPassword ? "请再次输入密码。" : form.confirmPassword === form.password ? "" : "两次输入的密码不一致。"
-  };
-}
-
-function validateEmailFieldClean(value: string): string {
-  const email = value.trim();
-  if (!email) return "请输入邮箱地址。";
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? "" : "邮箱格式不正确。";
-}
-
-function validateProfileFieldsClean(form: ProfileFormState, user?: LoginUser): FieldErrors {
-  const errors: FieldErrors = {};
-  if (!form.displayName.trim()) errors.displayName = "请输入昵称。";
-  else if (form.displayName.trim().length > 80) errors.displayName = "昵称不能超过 80 个字符。";
-  const currentEmail = user?.email ?? user?.username ?? "";
-  errors.email = validateEmailFieldClean(form.email);
-  if (form.email.trim() && form.email.trim() !== currentEmail && !form.emailCode.trim()) errors.emailCode = "更换邮箱需要填写验证码。";
-  const changingPassword = Boolean(form.currentPassword || form.newPassword || form.confirmPassword);
-  if (changingPassword) {
-    if (!form.currentPassword) errors.currentPassword = "请输入当前密码。";
-    if (!form.newPassword) errors.newPassword = "请输入新密码。";
-    else if (form.newPassword.length < 8 || form.newPassword.length > 64 || !/[A-Za-z]/.test(form.newPassword) || !/\d/.test(form.newPassword)) errors.newPassword = "新密码需要 8-64 位，并包含字母和数字。";
-    if (!form.confirmPassword) errors.confirmPassword = "请再次输入新密码。";
-    else if (form.confirmPassword !== form.newPassword) errors.confirmPassword = "两次输入的新密码不一致。";
-  }
-  return errors;
-}
-
-function validateSkillDraftClean(draft: SkillDraft, creation?: { kind: SkillKind; expertField: string }): FieldErrors {
-  const errors: FieldErrors = {};
-  if (!draft.name.trim()) errors.name = "请填写 Skill 名称。";
-  else if (draft.name.trim().length > 80) errors.name = "Skill 名称不能超过 80 个字符。";
-  if (!draft.description.trim()) errors.description = "请填写一句简介。";
-  else if (draft.description.trim().length > 160) errors.description = "简介不能超过 160 个字符。";
-  if (!draft.persona.trim()) errors.persona = creation?.kind === "expert" ? "请填写专业描述。" : "请填写人格设定。";
-  if (!draft.tone.trim() && creation?.kind !== "expert" && creation?.kind !== "custom") errors.tone = "请填写相处语气。";
-  if (creation && creation.kind === "expert" && !creation.expertField.trim()) errors.expertField = "请填写专业方向。";
-  return errors;
-}
-
-function validateProfileFields(form: ProfileFormState, user?: LoginUser): FieldErrors {
-  return validateProfileFieldsClean(form, user);
-  const errors: FieldErrors = {};
-  if (!form.displayName.trim()) errors.displayName = "请输入昵称。";
-  else if (form.displayName.trim().length > 80) errors.displayName = "昵称不能超过 80 个字符。";
-  const currentEmail = user?.email ?? user?.username ?? "";
-  errors.email = validateEmailField(form.email);
-  if (form.email.trim() && form.email.trim() !== currentEmail && !form.emailCode.trim()) errors.emailCode = "更换邮箱需要填写验证码。";
-  const changingPassword = Boolean(form.currentPassword || form.newPassword || form.confirmPassword);
-  if (changingPassword) {
-    if (!form.currentPassword) errors.currentPassword = "请输入当前密码。";
-    if (!form.newPassword) errors.newPassword = "请输入新密码。";
-    else if (form.newPassword.length < 8 || form.newPassword.length > 64 || !/[A-Za-z]/.test(form.newPassword) || !/\d/.test(form.newPassword)) errors.newPassword = "新密码需为 8-64 位，并包含字母和数字。";
-    if (!form.confirmPassword) errors.confirmPassword = "请再次输入新密码。";
-    else if (form.confirmPassword !== form.newPassword) errors.confirmPassword = "两次输入的新密码不一致。";
-  }
-  return errors;
-}
-
-function validateSkillDraft(draft: SkillDraft, creation?: { kind: SkillKind; expertField: string }): FieldErrors {
-  return validateSkillDraftClean(draft, creation);
-}
-
-function isValidHttpUrl(value: string, httpsOnly: boolean): boolean {
-  try {
-    const url = new URL(value.trim());
-    return httpsOnly ? url.protocol === "https:" : url.protocol === "https:" || url.protocol === "http:";
-  } catch {
-    return false;
-  }
-}
-
-function hasFieldErrors(errors: FieldErrors): boolean {
-  return Object.values(errors).some(Boolean);
-}
-
-function clearFieldError(errors: FieldErrors, key: string): FieldErrors {
-  if (!errors[key]) return errors;
-  const next = { ...errors };
-  delete next[key];
-  return next;
-}
-
-function fieldClass(error?: string): string | undefined {
-  return error ? "has-field-error" : undefined;
-}
-
 function roleLabel(role: string): string {
-  return role === "ADMIN" ? "管理员" : role === "CREATOR" ? "创作者" : "用户";
   return role === "ADMIN" ? "管理员" : role === "CREATOR" ? "创作者" : "用户";
 }
 
@@ -3545,7 +3129,6 @@ function rechargeStatusLabel(status: string): string {
 }
 
 function tokenTransactionLabel(kind: TokenTransaction["kind"] | string): string {
-  return tokenTransactionLabelClean(kind);
   const labels: Record<string, string> = {
     RECHARGE: "Token 充值",
     CLOUD_MODEL_USAGE: "平台模型消耗",
@@ -3566,19 +3149,6 @@ function noticeTone(message: string): NoticeTone {
   if (/失败|错误|未连接|过长|too long|error|failed|offline/i.test(message)) return "error";
   if (/已|成功|保存|发布|提交|发送|创建|复制|确认|ok|success/i.test(message)) return "success";
   return "info";
-}
-
-function tokenTransactionLabelClean(kind: TokenTransaction["kind"] | string): string {
-  const labels: Record<string, string> = {
-    RECHARGE: "Token 充值",
-    CLOUD_MODEL_USAGE: "平台模型消耗",
-    AGENT_MODEL_USAGE: "Agent 模型消耗",
-    AGENT_SERVICE_FEE: "Agent 服务费",
-    AGENT_SERVICE_EARNING: "创作者收益",
-    REFUND: "退款",
-    ADMIN_ADJUSTMENT: "平台调整"
-  };
-  return labels[kind.toUpperCase()] ?? kind;
 }
 
 function fallbackImage(event: React.SyntheticEvent<HTMLImageElement>): void {
