@@ -32,6 +32,16 @@ flowchart LR
 
 The API handles authentication, CRUD, conversations, marketplace operations, token ledgers, and enqueueing. The worker owns autonomous execution and scheduling. PostgreSQL is the source of truth; Redis is transport, not durable business storage.
 
+## Application Boundaries
+
+The desktop session hook owns login, restoration, logout, and remembered credentials. Each login/logout changes a session generation; the application subtree is keyed by that generation so account-specific drafts and lists are discarded together. Requests from the application shell use a generation-bound API: both late results and late failures are rejected, and callbacks from an old session cannot initiate further requests or update the authenticated user. Remembered credential writes are serialized so logout deletion follows any pending save. Utility windows clear their own session on logout; the main window owns remembered-account metadata.
+
+Both Agent chat views use the same conversation message resource. It merges poll snapshots, realtime events, and send responses by message ID, preserves arrivals until a later snapshot acknowledges them, and rejects work belonging to an old conversation selection. Once acknowledged, messages follow the server's bounded history window.
+
+Owner requests and Agent actions share the goal-update command, including completion timestamps and Agent ownership checks. Callers provide the database transaction: the owner API commits the goal and audit event together, and the runtime uses its existing action-idempotency transaction to prevent repeated updates when a run is replayed.
+
+`WalletService` owns balance mutations and ledger entries. It accepts the caller's active transaction and does not start or commit its own transaction. Model reservation/settlement and recharge-order state changes remain in the same transaction as their wallet changes. Authorization comes from `UserAccessService`; request/attempt idempotency remains with the model or order workflow. `UsersService` keeps its existing public methods as delegating entry points.
+
 ## Agent Run
 
 ```mermaid
