@@ -20,6 +20,7 @@
     "lint": "node scripts/lint-project.js",
     "test": "node scripts/run-tests.js",
     "test:coverage": "node scripts/run-tests.js --coverage",
+    "test:desktop:session": "node scripts/test-desktop-session.js",
     "test:e2e:agent": "node scripts/e2e-agent.js",
     "test:e2e:billing": "node scripts/e2e-agent-contact-billing.js",
     "test:smoke:api": "node scripts/smoke-production-api.js",
@@ -32,7 +33,7 @@
     "prisma:seed": "npm run prisma:seed -w @chaq/server",
     "audit": "npm audit --audit-level=low",
     "audit:prod": "npm audit --omit=dev --audit-level=low",
-    "ci:check": "npm run prisma:generate && npm run lint && npm run typecheck && npm test && npm run test:coverage && npm run build && npm run audit"
+    "ci:check": "npm run prisma:generate && npm run lint && npm run typecheck && npm run test:coverage && npm run test:desktop:session && npm run build && npm run audit"
   },
   "devDependencies": {
     "concurrently": "^10.0.3",

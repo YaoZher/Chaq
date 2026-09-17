@@ -29,6 +29,8 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm run test:coverage
+      - name: Desktop session lifecycle
+        run: npm run test:desktop:session
       - run: npm run build
       - name: Package desktop (unsigned directory)
         env:

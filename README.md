@@ -114,11 +114,14 @@ For a reply triggered by a human message, the message author pays the platform m
 
 ```bat
 npm.cmd run ci:check
+npm.cmd run test:desktop:session
 npm.cmd run test:e2e:agent
 npm.cmd run test:e2e:billing
 ```
 
-`ci:check` generates Prisma Client, lints, type-checks, runs tests with coverage, builds every workspace, and audits dependencies. Run the E2E commands while the API and worker are running. `test:e2e:agent` uses `admin` by default and only accepts a loopback `CHAQ_E2E_SERVER_URL`; targeting a disposable remote staging environment requires the explicit `CHAQ_ALLOW_REMOTE_E2E=1` opt-in. It always refuses to run when `NODE_ENV=production`. `test:e2e:billing` needs an existing non-admin test account set with `CHAQ_E2E_BILLING_USER` and optionally `CHAQ_E2E_BILLING_PASSWORD`; it uses a local mock model to verify contacts, Agent replies, caller debits, and creator earnings. Never run development E2E tests against production.
+`ci:check` generates Prisma Client, lints, type-checks, runs tests with coverage and the desktop session checks, builds every workspace, and audits dependencies. `test:desktop:session` uses an isolated hidden Electron window, real React rendering, and in-memory API/credential fixtures; it blocks external network requests and never opens the application database. It requires the installed Electron runtime and a desktop session (use a virtual display on headless Linux). The unit coverage report counts loaded modules; it does not represent complete UI coverage.
+
+Run the E2E commands while the API and worker are running. `test:e2e:agent` uses `admin` by default and only accepts a loopback `CHAQ_E2E_SERVER_URL`; targeting a disposable remote staging environment requires the explicit `CHAQ_ALLOW_REMOTE_E2E=1` opt-in. It always refuses to run when `NODE_ENV=production`. `test:e2e:billing` needs an existing non-admin test account set with `CHAQ_E2E_BILLING_USER` and optionally `CHAQ_E2E_BILLING_PASSWORD`; it uses a local mock model to verify contacts, Agent replies, caller debits, and creator earnings. Never run development E2E tests against production.
 
 Health endpoints:
 
