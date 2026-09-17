@@ -14,6 +14,7 @@ import type {
   AgentTask,
   AgentTool
 } from "@chaq/shared";
+import type { AgentGoal as AgentGoalRow } from "@prisma/client";
 
 const lower = <T extends string>(value: string): T => value.toLowerCase() as T;
 const iso = (value: Date | null | undefined): string | null => value ? value.toISOString() : null;
@@ -189,7 +190,7 @@ export function toRelationship(row: any): AgentRelationship {
   };
 }
 
-export function toGoal(row: any): AgentGoal {
+export function toGoal(row: AgentGoalRow): AgentGoal {
   return {
     id: row.id,
     agentId: row.agentId,

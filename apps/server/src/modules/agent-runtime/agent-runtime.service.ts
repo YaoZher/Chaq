@@ -1,20 +1,29 @@
 import { createHash, randomUUID } from "node:crypto";
 import { Inject, Injectable, NotFoundException } from "@nestjs/common";
 import {
+  Agent,
   AgentAutonomyMode,
   AgentEventKind,
+  AgentGoal,
   AgentGoalStatus,
   AgentHttpAttemptStatus,
   AgentHttpToolAttempt,
   AgentMemoryKind,
+  AgentMemory,
   AgentPostVisibility,
   AgentRunStatus,
+  AgentRun,
   AgentRunTrigger,
   AgentStatus,
   AgentTaskStatus,
+  AgentTask,
+  AgentTool,
   AgentToolKind,
+  ConversationMessage,
+  ConversationParticipant,
   ParticipantKind,
-  Prisma
+  Prisma,
+  SocialRelationship
 } from "@prisma/client";
 import { Annotation, END, START, StateGraph } from "@langchain/langgraph";
 import { z } from "zod";
@@ -28,6 +37,7 @@ import {
 import { cosineSimilarity, extractKeywords } from "../../common/vector-search";
 import { ModelsService } from "../models/models.service";
 import { ConversationsService } from "../conversations/conversations.service";
+import { updateAgentGoal } from "../agents/agent-goal-commands";
 
 const actionSchema = z.object({
   type: z.enum(["reply", "send_message", "publish_post", "remember", "create_goal", "update_goal", "create_task", "use_http_tool", "wait"]),
@@ -61,17 +71,21 @@ type ActionResult = { type: string; ok: boolean; summary: string };
 type ActionExecution = { summary: string; nextRunAt?: string; eventRecorded?: boolean };
 
 type RuntimeContext = {
-  run: any;
-  agent: any;
-  relationships: any[];
-  goals: any[];
-  tasks: any[];
-  memories: any[];
-  tools: any[];
+  run: AgentRun;
+  agent: Agent;
+  relationships: SocialRelationship[];
+  goals: AgentGoal[];
+  tasks: AgentTask[];
+  memories: AgentMemory[];
+  tools: AgentTool[];
   knowledge: Array<{ source: string; content: string }>;
-  messages: any[];
-  participants: any[];
+  messages: ConversationMessage[];
+  participants: ConversationParticipant[];
 };
+
+type KnowledgeChunk = Prisma.AgentKnowledgeChunkGetPayload<{
+  include: { source: { select: { title: true } } };
+}>;
 
 const SAFE_HTTP_METHODS = new Set(["GET", "POST", "HEAD"]);
 const RUN_LEASE_MS = 3 * 60_000;
@@ -529,16 +543,11 @@ export class AgentRuntimeService {
     }
     if (action.type === "update_goal") {
       if (!action.goalId) throw new Error("Goal id is required.");
-      const changed = await this.prisma.agentGoal.updateMany({
-        where: { id: action.goalId, agentId: agent.id },
-        data: {
-          status: action.status ? AgentGoalStatus[action.status.toUpperCase() as keyof typeof AgentGoalStatus] : undefined,
-          progress: action.progress,
-          completedAt: action.status === "completed" ? new Date() : undefined
-        }
+      const goalId = action.goalId;
+      return this.executeDatabaseAction(state, action, idempotencyKey, async (tx) => {
+        await updateAgentGoal(tx, agent.id, goalId, { status: action.status, progress: action.progress });
+        return `Updated goal ${goalId}.`;
       });
-      if (!changed.count) throw new Error("Goal not found.");
-      return { summary: `Updated goal ${action.goalId}.` };
     }
     if (action.type === "create_task") {
       if (!action.title) throw new Error("Task title is required.");
@@ -968,7 +977,7 @@ export class AgentRuntimeService {
     const queryEmbedding = await this.models.agentEmbedding(
       run.agentId,
       query,
-      this.modelPayerUserId({ run, agent: run.agent } as RuntimeContext),
+      this.modelPayerUserId({ run, agent: run.agent }),
       `${runId}:context-embedding`
     );
     const knowledge = this.rankKnowledge(chunks, query, queryEmbedding.vector).slice(0, 12).map((chunk) => ({
@@ -1024,7 +1033,7 @@ export class AgentRuntimeService {
     ].join("\n\n").slice(0, 60_000);
   }
 
-  private modelPayerUserId(context: RuntimeContext): string {
+  private modelPayerUserId(context: { run: Pick<AgentRun, "trigger" | "triggerPayload">; agent: Pick<Agent, "ownerId"> }): string {
     if (context.run.trigger === "USER_MESSAGE") {
       const authorId = (context.run.triggerPayload as Record<string, unknown> | null)?.authorId;
       if (typeof authorId === "string" && authorId) return authorId;
@@ -1032,7 +1041,7 @@ export class AgentRuntimeService {
     return context.agent.ownerId;
   }
 
-  private systemPrompt(agent: any): string {
+  private systemPrompt(agent: Agent): string {
     return [
       `You are ${agent.name}, an autonomous digital person living in Chaq.`,
       "You are not a generic assistant and must not claim to be the human owner.",
@@ -1071,7 +1080,7 @@ export class AgentRuntimeService {
     const latest = [...context.messages].reverse().find((message) =>
       !(message.authorKind === ParticipantKind.AGENT && message.authorId === context.agent.id) && message.authorId
     );
-    if (latest) {
+    if (latest?.authorId) {
       const participant = context.participants.find((item) => item.participantKind === latest.authorKind && item.participantId === latest.authorId);
       return { kind: latest.authorKind, id: latest.authorId, label: participant?.displayNameSnapshot ?? latest.authorId };
     }
@@ -1136,7 +1145,7 @@ export class AgentRuntimeService {
     });
   }
 
-  private rankKnowledge(chunks: any[], query: string, queryVector: number[]) {
+  private rankKnowledge(chunks: KnowledgeChunk[], query: string, queryVector: number[]) {
     const terms = new Set(this.keywords(query));
     return chunks.map((chunk) => ({
       ...chunk,
@@ -1145,7 +1154,7 @@ export class AgentRuntimeService {
     })).sort((a, b) => b.score - a.score || a.position - b.position);
   }
 
-  private rankMemories(memories: any[], query: string, queryVector: number[]) {
+  private rankMemories(memories: AgentMemory[], query: string, queryVector: number[]) {
     const terms = new Set(this.keywords(query));
     return memories.map((memory) => ({
       ...memory,
@@ -1159,7 +1168,7 @@ export class AgentRuntimeService {
     return extractKeywords(content, 80);
   }
 
-  private async resetBudgetIfNeeded(agent: any): Promise<void> {
+  private async resetBudgetIfNeeded(agent: Agent): Promise<void> {
     const reset = agent.budgetResetAt as Date;
     const now = new Date();
     if (reset.toISOString().slice(0, 10) === now.toISOString().slice(0, 10)) return;

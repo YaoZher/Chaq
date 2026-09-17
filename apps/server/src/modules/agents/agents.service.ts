@@ -26,6 +26,7 @@ import { cosineSimilarity, extractKeywords } from "../../common/vector-search";
 import { UsersService } from "../users/users.service";
 import { ModelsService } from "../models/models.service";
 import { AgentQueueService } from "./agent-queue.service";
+import { updateAgentGoal, type AgentGoalUpdate } from "./agent-goal-commands";
 import {
   toAgentDetail,
   toAgentContact,
@@ -612,29 +613,20 @@ export class AgentsService {
     return toGoal(row);
   }
 
-  async updateGoal(userId: string, agentId: string, goalId: string, input: any) {
+  async updateGoal(userId: string, agentId: string, goalId: string, input: AgentGoalUpdate) {
     await this.ownedAgent(userId, agentId);
-    if (input.parentGoalId !== undefined) {
-      if (input.parentGoalId === goalId) throw new BadRequestException("A goal cannot be its own parent.");
-      await this.assertGoalBelongsToAgent(agentId, input.parentGoalId, "Parent goal");
-    }
-    const changed = await this.prisma.agentGoal.updateMany({
-      where: { id: goalId, agentId },
-      data: {
-        parentGoalId: input.parentGoalId,
-        title: input.title,
-        description: input.description,
-        status: input.status ? AgentGoalStatus[input.status.toUpperCase() as keyof typeof AgentGoalStatus] : undefined,
-        priority: input.priority,
-        progress: input.progress,
-        success: input.success,
-        dueAt: input.dueAt === null ? null : input.dueAt ? new Date(input.dueAt) : undefined,
-        completedAt: input.status === "completed" ? new Date() : input.status ? null : undefined
-      }
+    const row = await this.prisma.$transaction(async (tx) => {
+      const goal = await updateAgentGoal(tx, agentId, goalId, input);
+      await tx.agentEvent.create({
+        data: {
+          agentId,
+          kind: AgentEventKind.GOAL,
+          title: "Goal updated",
+          content: `${goal.title}: ${goal.status.toLowerCase()}`
+        }
+      });
+      return goal;
     });
-    if (!changed.count) throw new NotFoundException("Goal not found.");
-    const row = await this.prisma.agentGoal.findUniqueOrThrow({ where: { id: goalId } });
-    await this.event(agentId, AgentEventKind.GOAL, "Goal updated", `${row.title}: ${row.status.toLowerCase()}`);
     return toGoal(row);
   }
 
