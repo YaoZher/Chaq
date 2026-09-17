@@ -77,8 +77,12 @@ jobs:
         shell: bash
         run: |
           ready=0
+          worker_container=$(docker compose -f docker-compose.production.yml ps -q worker)
+          test -n "$worker_container"
           for attempt in {1..60}; do
-            if curl --fail --silent http://127.0.0.1:24537/api/health/ready >/dev/null; then
+            worker_status=$(docker inspect --format='{{.State.Health.Status}}' "$worker_container")
+            if curl --fail --silent --connect-timeout 2 --max-time 3 http://127.0.0.1:24537/api/health/ready >/dev/null \
+              && test "$worker_status" = "healthy"; then
               ready=1
               break
             fi
@@ -86,7 +90,6 @@ jobs:
           done
           docker compose -f docker-compose.production.yml ps
           test "$ready" = "1"
-          test "$(docker inspect --format='{{.State.Health.Status}}' chaq-production-worker-1)" = "healthy"
       - name: Verify authenticated API flow
         shell: bash
         run: |
