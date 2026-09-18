@@ -45,7 +45,10 @@
   "overrides": {
     "@nestjs/common": "11.1.28",
     "@nestjs/core": "11.1.28",
-    "@nestjs/platform-express": "11.1.28",
+    "@nestjs/platform-express": {
+      ".": "11.1.28",
+      "multer": "2.4.0"
+    },
     "file-type": "21.3.4",
     "tsx": {
       "esbuild": "0.28.1"
