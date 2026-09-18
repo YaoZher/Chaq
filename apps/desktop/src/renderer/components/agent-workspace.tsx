@@ -107,6 +107,8 @@ export function AgentWorkspace(props: {
   useEffect(() => {
     void refreshDirectory();
     return () => {
+      selectedAgentIdRef.current = null;
+      conversationIdRef.current = null;
       selectionRequests.current.cancel();
       pollRequests.current.cancel();
       sendRequests.current.cancel();
@@ -387,9 +389,9 @@ export function AgentWorkspace(props: {
             <div className="agent-stage-body">
               {tab === "chat" && <AgentChat agent={agent} user={props.user} messages={messages} composer={composer} setComposer={(value) => { messageAttempt.current.contentChanged(conversationIdRef.current, value); setComposer(value); }} busy={busy} thinking={agent.presence === "thinking"} onSubmit={sendMessage} />}
               {tab === "identity" && <AgentIdentityEditor key={agent.id} agent={agent} providers={props.providers} onSaved={(next) => { setAgent((current) => current?.id === next.id ? next : current); void refreshDirectory(); }} onNotice={props.onNotice} />}
-              {tab === "goals" && <AgentGoals agent={agent} onChanged={() => void selectAgent(agent.id)} onNotice={props.onNotice} />}
-              {tab === "memory" && <AgentMemoryPanel agent={agent} onChanged={() => void selectAgent(agent.id)} onNotice={props.onNotice} />}
-              {tab === "relationships" && <AgentRelationships agent={agent} onOpenProfile={setProfileAgentId} onChanged={() => void selectAgent(agent.id)} onNotice={props.onNotice} />}
+              {tab === "goals" && <AgentGoals agent={agent} onChanged={() => { if (selectedAgentIdRef.current === agent.id) void poll(); }} onNotice={props.onNotice} />}
+              {tab === "memory" && <AgentMemoryPanel agent={agent} onChanged={() => { if (selectedAgentIdRef.current === agent.id) void poll(); }} onNotice={props.onNotice} />}
+              {tab === "relationships" && <AgentRelationships agent={agent} onOpenProfile={setProfileAgentId} onChanged={() => { if (selectedAgentIdRef.current === agent.id) void poll(); }} onNotice={props.onNotice} />}
               {tab === "activity" && <AgentActivity events={activity} />}
             </div>
           </>

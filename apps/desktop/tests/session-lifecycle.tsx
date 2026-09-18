@@ -6,6 +6,7 @@ import { api } from "../src/renderer/lib/api";
 import { isSupersededRequest } from "../src/renderer/lib/latest-request";
 import { loadRememberedAccounts, saveRememberedAccounts, type RememberedCredential } from "../src/renderer/lib/remembered-accounts";
 import { useSession, type SessionState } from "../src/renderer/lib/use-session";
+import { runWorkspaceLifecycleCases } from "./workspace-lifecycle";
 
 type Result = { name: string; passed: boolean; error?: string };
 declare global {
@@ -360,6 +361,7 @@ async function main() {
       await test.dispose();
     }
   }
+  results.push(...await runWorkspaceLifecycleCases());
   window.sessionTest.complete(results);
 }
 
