@@ -1,12 +1,5 @@
 const http = require("node:http");
-
-let baseUrl = "";
-const username = process.env.CHAQ_E2E_USERNAME || "admin";
-const password = process.env.CHAQ_E2E_PASSWORD || "123456";
-const providerId = process.env.CHAQ_E2E_PROVIDER_ID || null;
-const model = process.env.CHAQ_E2E_MODEL || null;
-const timeoutMs = Math.max(10_000, Number(process.env.CHAQ_E2E_TIMEOUT_MS || 90_000));
-const useMockModel = process.env.CHAQ_E2E_MOCK_MODEL === "1";
+const { randomUUID } = require("node:crypto");
 
 function isLoopbackHostname(hostname) {
   const normalized = String(hostname || "")
@@ -42,20 +35,39 @@ function resolveE2EBaseUrl(env = process.env) {
   return parsed.toString().replace(/\/$/, "");
 }
 
-async function request(path, init = {}, sessionToken) {
-  const response = await fetch(`${baseUrl}${path}`, {
-    ...init,
-    headers: {
-      "content-type": "application/json",
-      ...(sessionToken ? { "x-session-token": sessionToken } : {}),
-      ...init.headers
-    }
-  });
-  const data = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new Error(`${init.method || "GET"} ${path} failed (${response.status}): ${JSON.stringify(data)}`);
+function positiveTimeout(value, fallback, name) {
+  const parsed = Number(value || fallback);
+  if (!Number.isInteger(parsed) || parsed <= 0 || parsed > 2_147_483_647) {
+    throw new Error(`${name} must be a positive integer no greater than 2147483647.`);
   }
-  return data;
+  return parsed;
+}
+
+function createRequest(baseUrl, fetchImpl, requestTimeoutMs) {
+  return async (path, init = {}, sessionToken) => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(new Error(`Request ${init.method || "GET"} ${path} timed out after ${requestTimeoutMs}ms.`)), requestTimeoutMs);
+    try {
+      const response = await fetchImpl(`${baseUrl}${path}`, {
+        ...init,
+        redirect: "error",
+        signal: init.signal ? AbortSignal.any([init.signal, controller.signal]) : controller.signal,
+        headers: {
+          "content-type": "application/json",
+          ...(sessionToken ? { "x-session-token": sessionToken } : {}),
+          ...init.headers
+        }
+      });
+      const data = await response.json().catch(() => null);
+      if (controller.signal.aborted) throw controller.signal.reason;
+      if (!response.ok) {
+        throw new Error(`${init.method || "GET"} ${path} failed (${response.status}): ${JSON.stringify(data)}`);
+      }
+      return data;
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
 }
 
 async function waitFor(predicate, timeoutMs = 45_000) {
@@ -110,50 +122,47 @@ async function startMockModel() {
   return { server, baseUrl: `http://127.0.0.1:${address.port}/v1` };
 }
 
-function providerPayload(provider, overrides = {}) {
-  return {
-    id: provider.id,
-    kind: provider.kind,
-    name: provider.name,
-    baseUrl: provider.baseUrl,
-    apiKey: "",
-    models: provider.models,
-    enabled: provider.enabled,
-    promptTokenPrice: provider.promptTokenPrice,
-    completionTokenPrice: provider.completionTokenPrice,
-    contextWindow: provider.contextWindow,
-    ...overrides
-  };
-}
-
-async function main() {
-  baseUrl = resolveE2EBaseUrl(process.env);
+async function main(env = process.env, dependencies = {}) {
+  const baseUrl = resolveE2EBaseUrl(env);
+  const timeoutMs = Math.max(10_000, positiveTimeout(env.CHAQ_E2E_TIMEOUT_MS, 90_000, "CHAQ_E2E_TIMEOUT_MS"));
+  const requestTimeoutMs = positiveTimeout(env.CHAQ_E2E_REQUEST_TIMEOUT_MS, 15_000, "CHAQ_E2E_REQUEST_TIMEOUT_MS");
+  const request = createRequest(baseUrl, dependencies.fetch || globalThis.fetch, requestTimeoutMs);
+  const useMockModel = env.CHAQ_E2E_MOCK_MODEL === "1";
   const login = await request("/auth/login", {
     method: "POST",
-    body: JSON.stringify({ username, password })
+    body: JSON.stringify({ username: env.CHAQ_E2E_USERNAME || "admin", password: env.CHAQ_E2E_PASSWORD || "123456" })
   });
   const token = login.sessionToken;
-  let selectedProviderId = providerId;
-  let selectedModel = model;
-  let originalProvider = null;
+  let selectedProviderId = env.CHAQ_E2E_PROVIDER_ID || null;
+  let selectedModel = env.CHAQ_E2E_MODEL || null;
+  let createdProvider = null;
   let mock = null;
   let agent = null;
-  const suffix = Date.now().toString(36);
+  let resultSummary;
+  let failure;
+  const cleanupFailures = [];
+  const suffix = `${Date.now().toString(36)}-${randomUUID().slice(0, 8)}`;
   try {
     if (useMockModel) {
-      mock = await startMockModel();
-      const providers = await request("/models/admin/providers", {}, token);
-      originalProvider = selectedProviderId
-        ? providers.find((provider) => provider.id === selectedProviderId)
-        : providers.find((provider) => provider.enabled);
-      if (!originalProvider) throw new Error("No model provider is available for the mock-model E2E test.");
-      selectedProviderId = originalProvider.id;
-      selectedModel = selectedModel || originalProvider.models[0]?.id;
-      if (!selectedModel) throw new Error("The selected provider has no model.");
-      await request("/models/admin/providers", {
+      mock = await (dependencies.startMockModel || startMockModel)();
+      selectedModel = `chaq-e2e-${suffix}`;
+      // Omit id so the API creates a dedicated provider. Never borrow a real
+      // provider or overwrite its endpoint, API key, models, or prices.
+      createdProvider = await request("/models/admin/providers", {
         method: "POST",
-        body: JSON.stringify(providerPayload(originalProvider, { baseUrl: mock.baseUrl, enabled: true }))
+        body: JSON.stringify({
+          kind: "custom",
+          name: `Agent E2E ${suffix}`,
+          baseUrl: mock.baseUrl,
+          apiKey: "chaq-e2e-mock-only",
+          models: [{ id: selectedModel, label: selectedModel, contextWindow: 8192 }],
+          enabled: true,
+          promptTokenPrice: 0,
+          completionTokenPrice: 0,
+          contextWindow: 8192
+        })
       }, token);
+      selectedProviderId = createdProvider.id;
     }
     agent = await request("/agents", {
       method: "POST",
@@ -208,7 +217,7 @@ async function main() {
       throw new Error("Agent completed its run without publishing the planned profile post.");
     }
 
-    console.log(JSON.stringify({
+    resultSummary = {
       ok: true,
       modelConfigured: Boolean(selectedProviderId && selectedModel),
       mockModel: useMockModel,
@@ -221,22 +230,41 @@ async function main() {
       taskCount: result.detail.tasks.length,
       profilePostCount: profile.posts.length,
       replyPreview: result.agentReply.content.slice(0, 120)
-    }, null, 2));
+    };
+  } catch (error) {
+    failure = error;
   } finally {
+    const cleanup = async (label, operation) => {
+      try {
+        await operation();
+      } catch (error) {
+        cleanupFailures.push(new Error(`${label}: ${error instanceof Error ? error.message : String(error)}`, { cause: error }));
+      }
+    };
     if (agent) {
-      await request(`/agents/${agent.id}`, {
+      await cleanup(`Could not archive test agent ${agent.id}`, () => request(`/agents/${agent.id}`, {
         method: "POST",
         body: JSON.stringify({ status: "archived" })
-      }, token).catch(() => undefined);
+      }, token));
     }
-    if (originalProvider) {
-      await request("/models/admin/providers", {
+    if (createdProvider) {
+      await cleanup(`Could not disable test provider ${createdProvider.id}`, () => request(`/models/admin/providers/${createdProvider.id}/status`, {
         method: "POST",
-        body: JSON.stringify(providerPayload(originalProvider))
-      }, token).catch(() => undefined);
+        body: JSON.stringify({ enabled: false })
+      }, token));
     }
-    if (mock) await new Promise((resolve) => mock.server.close(resolve));
+    if (mock) await cleanup("Could not stop the mock model", () => new Promise((resolve, reject) => {
+      mock.server.close((error) => error ? reject(error) : resolve());
+      mock.server.closeAllConnections?.();
+    }));
   }
+  if (cleanupFailures.length) {
+    const errors = failure ? [failure, ...cleanupFailures] : cleanupFailures;
+    throw new AggregateError(errors, errors.map((error) => error instanceof Error ? error.message : String(error)).join("\n"));
+  }
+  if (failure) throw failure;
+  (dependencies.log || console.log)(JSON.stringify(resultSummary, null, 2));
+  return resultSummary;
 }
 
 if (require.main === module) {
@@ -246,4 +274,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { isLoopbackHostname, resolveE2EBaseUrl };
+module.exports = { isLoopbackHostname, resolveE2EBaseUrl, createRequest, main };
