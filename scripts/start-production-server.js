@@ -14,6 +14,11 @@ if (localPreview) {
   delete process.env.CHAQ_ENV_ROOT;
   delete process.env.CHAQ_ENV_FILE;
   delete process.env.DOCKER_CONFIG;
+  delete process.env.DOCKER_HOST;
+  delete process.env.DOCKER_CONTEXT;
+  delete process.env.DOCKER_TLS;
+  delete process.env.DOCKER_TLS_VERIFY;
+  delete process.env.DOCKER_CERT_PATH;
 }
 
 const { previewEnv, serverEnv, projectLogs } = require("./env-paths");

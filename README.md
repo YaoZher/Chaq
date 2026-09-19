@@ -22,6 +22,8 @@ See [Agent runtime](docs/agent-runtime.md), [architecture](docs/architecture.md)
 
 Requirements: Node.js 22.12+, npm 11.18.0 (the version pinned in `package.json`), PostgreSQL binaries available under the repository-relative `.chaq-data\postgresql\bin` directory, through `CHAQ_PG_BIN`, or on `PATH`, and Docker Desktop for the loopback-only Redis used by local production preview.
 
+Docker Desktop only needs to be installed on Windows; the launcher starts it automatically when its Linux engine is stopped and waits up to two minutes for readiness before starting Redis. An already running engine is reused. Docker startup does not install software, switch container modes, or change machine settings. The local preview clears inherited remote Docker connection overrides and keeps Compose on the verified local engine. PostgreSQL starts automatically from the installed binaries, and the launcher creates the preview database, applies migrations, verifies Redis, starts the API and Agent worker, and then opens the desktop client.
+
 On Windows, use:
 
 ```bat

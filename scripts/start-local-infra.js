@@ -3,6 +3,7 @@ const net = require("node:net");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { parseEnv } = require("./env-format");
+const { ensureDockerEngine } = require("./ensure-docker-engine");
 const {
   chaqEnvironmentRoot,
   dockerConfig,
@@ -332,21 +333,17 @@ async function startRedis(env) {
 
   console.log(`[Chaq] Starting Redis with Docker Compose on 127.0.0.1:${redisPort}`);
   fs.mkdirSync(dockerConfig, { recursive: true });
-  const dockerEnvironment = { DOCKER_CONFIG: process.env.DOCKER_CONFIG || dockerConfig };
+  const engine = await ensureDockerEngine({
+    environment: { ...process.env, DOCKER_CONFIG: process.env.DOCKER_CONFIG || dockerConfig },
+    log: (message) => console.log(message)
+  });
+  const dockerEnvironment = engine.dockerEnvironment;
   const composeFile = path.join(projectRoot, "docker-compose.yml");
   const composeArgs = [
     "compose",
     "--project-name", "chaq-preview",
     "--file", composeFile
   ];
-  try {
-    run("docker", ["info"], { capture: true, env: dockerEnvironment });
-  } catch (error) {
-    throw new Error(
-      "Docker engine is unavailable. Start Docker Desktop (or another Docker engine) and wait until it is ready, then retry. "
-      + `Details: ${error instanceof Error ? error.message : String(error)}`
-    );
-  }
   if (localPreview) stopExposedLegacyPostgres(dockerEnvironment, composeFile);
   if (localPreview && alreadyRedis) {
     migrateLegacyRedisContainer(composeArgs, dockerEnvironment, composeFile);
