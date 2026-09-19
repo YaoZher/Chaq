@@ -36,7 +36,9 @@ const sourceFiles = [
   path.join(projectRoot, "scripts", "package-preview-client.js"),
   path.join(projectRoot, "scripts", "run-electron-builder.js"),
   path.join(projectRoot, "scripts", "stop-preview-client.js"),
-  path.join(projectRoot, "tools", "start-preview.bat")
+  path.join(projectRoot, "tools", "start-preview.bat"),
+  path.join(projectRoot, "tools", "start-preview.ps1"),
+  path.join(projectRoot, "tools", "start-preview-runtime.bat")
 ].concat(
   fs.readdirSync(projectRoot, { withFileTypes: true })
     .filter((entry) => entry.isFile() && /^tsconfig.*\.json$/i.test(entry.name))
