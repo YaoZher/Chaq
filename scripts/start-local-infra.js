@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const net = require("node:net");
 const path = require("node:path");
 const { spawnSync } = require("node:child_process");
+const { parseEnv } = require("./env-format");
 const {
   chaqEnvironmentRoot,
   dockerConfig,
@@ -11,31 +12,7 @@ const {
   serverEnv
 } = require("./env-paths");
 
-const requestedEnvFile = process.env.CHAQ_ENV_FILE || serverEnv;
-if (!fs.existsSync(requestedEnvFile)) require("./prepare-env");
-
 const postgresTools = ["initdb", "pg_ctl", "pg_isready", "psql", "createdb"];
-
-function parseEnv(text) {
-  const entries = {};
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) {
-      continue;
-    }
-    const index = line.indexOf("=");
-    if (index < 1) {
-      continue;
-    }
-    const key = line.slice(0, index).trim();
-    let value = line.slice(index + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    entries[key] = value;
-  }
-  return entries;
-}
 
 function readEnv() {
   const envFile = process.env.CHAQ_ENV_FILE || serverEnv;
@@ -500,6 +477,8 @@ function verifyRedisDockerBinding(composeArgs, dockerEnvironment, redisPort) {
 }
 
 async function main() {
+  const requestedEnvFile = process.env.CHAQ_ENV_FILE || serverEnv;
+  if (!fs.existsSync(requestedEnvFile)) require("./prepare-env");
   const { envFile, values } = readEnv();
   console.log(`[Chaq] Loading local environment from ${envFile}`);
   await startPostgres(values);

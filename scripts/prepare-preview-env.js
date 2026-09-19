@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const { randomBytes } = require("node:crypto");
 const path = require("node:path");
+const { formatEnvValue, parseEnv } = require("./env-format");
 
 function previewProjectPaths(projectRoot = path.resolve(__dirname, "..")) {
   const chaqEnvironmentRoot = path.join(projectRoot, ".chaq-data");
@@ -22,29 +23,6 @@ const {
   projectLogs,
   redisData
 } = previewProjectPaths();
-
-function parseEnv(text) {
-  const values = {};
-  for (const rawLine of String(text || "").split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const index = line.indexOf("=");
-    if (index < 1) continue;
-    const key = line.slice(0, index).trim();
-    let value = line.slice(index + 1).trim();
-    if (value.startsWith('"') && value.endsWith('"')) {
-      try {
-        value = JSON.parse(value);
-      } catch {
-        value = value.slice(1, -1);
-      }
-    } else if (value.startsWith("'") && value.endsWith("'")) {
-      value = value.slice(1, -1);
-    }
-    values[key] = value;
-  }
-  return values;
-}
 
 function previewValues(existing = {}, createSecret = () => randomBytes(48).toString("base64url")) {
   const modelSecret = validSecret(existing.MODEL_SECRET_KEY) ? existing.MODEL_SECRET_KEY : createSecret();
@@ -104,11 +82,6 @@ function validPreviewPassword(value) {
 function validBalance(value) {
   const parsed = Number(value);
   return Number.isInteger(parsed) && parsed >= 0;
-}
-
-function formatEnvValue(value) {
-  const text = String(value);
-  return /[\s#"']/u.test(text) ? JSON.stringify(text) : text;
 }
 
 function serializePreviewEnv(values) {

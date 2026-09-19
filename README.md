@@ -49,6 +49,8 @@ For the live Chaq domain, point Cloudflared hostname `chaq.yaozher.com` to servi
 
 The development launcher keeps its console window open while the API and Agent worker are running. Preview and production launchers manage API and worker pids in `.logs\pids`. Preview and formal production intentionally cannot replace or stop each other's runtime profile. Running a launcher again safely restarts its own managed profile; a port owned by another profile or a non-Chaq process is reported as a conflict.
 
+The startup scripts share one parser for `.chaq-data\server.env` and `.chaq-data\preview.env`: valid JSON escapes inside double quotes are decoded, while raw and single-quoted values preserve literal backslashes. For a hand-written Windows path, use a value such as `CHAQ_PG_DATA_DIR='C:\Work Space\Chaq\postgres-data'`. The generated `apps/server/.env` uses dotenv-compatible quoting so direct development startup reads the same paths and secrets as the launcher.
+
 Default ports:
 
 - Development API: `24537`

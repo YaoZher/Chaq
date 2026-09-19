@@ -1,6 +1,6 @@
 const fs = require("node:fs");
 const { previewEnv } = require("./env-paths");
-const { parseEnv } = require("./prepare-preview-env");
+const { parseEnv } = require("./env-format");
 
 async function smokeLocalPreview(options = {}) {
   const envFile = options.envFile || previewEnv;

@@ -36,7 +36,7 @@ COPY --chown=node:node --from=build /app/apps/server/dist ./apps/server/dist
 COPY --chown=node:node --from=build /app/apps/server/prisma ./apps/server/prisma
 COPY --chown=node:node --from=build /app/packages/shared/package.json ./packages/shared/package.json
 COPY --chown=node:node --from=build /app/packages/shared/dist ./packages/shared/dist
-COPY --chown=node:node scripts/create-admin-user.js scripts/validate-production-env.js ./scripts/
+COPY --chown=node:node scripts/create-admin-user.js scripts/validate-production-env.js scripts/env-format.js ./scripts/
 
 RUN mkdir -p /app/.logs && chown node:node /app/.logs
 

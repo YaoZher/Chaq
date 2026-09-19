@@ -1,6 +1,7 @@
 const fs = require("node:fs");
 const { randomBytes } = require("node:crypto");
 const path = require("node:path");
+const { formatDotenvValue, formatEnvValue, parseEnv } = require("./env-format");
 const {
   chaqEnvironmentRoot,
   electronCache,
@@ -44,10 +45,6 @@ for (const dir of [chaqEnvironmentRoot, electronCache, runtimeCache, npmCache, p
   fs.mkdirSync(dir, { recursive: true });
 }
 
-function formatEnvValue(value) {
-  return value.includes(" ") ? `"${value}"` : value;
-}
-
 function writeServerEnv() {
   const existingLines = fs.existsSync(serverEnv) ? fs.readFileSync(serverEnv, "utf8").split(/\r?\n/) : [];
   const seen = new Set();
@@ -64,7 +61,7 @@ function writeServerEnv() {
 
     const key = trimmed.slice(0, index).trim();
     if (key in secretEnv) {
-      const value = trimmed.slice(index + 1).trim().replace(/^"|"$/g, "");
+      const value = parseEnv(trimmed)[key];
       if (value) {
         existingSecrets.set(key, value);
         nextLines.push(line);
@@ -122,14 +119,14 @@ function writeWorkspaceServerEnv(secrets) {
     }
     const key = trimmed.slice(0, index).trim();
     if (key in values) {
-      nextLines.push(`${key}=${formatEnvValue(String(values[key]))}`);
+      nextLines.push(`${key}=${formatDotenvValue(values[key])}`);
       seen.add(key);
     } else {
       nextLines.push(line);
     }
   }
   for (const [key, value] of Object.entries(values)) {
-    if (!seen.has(key)) nextLines.push(`${key}=${formatEnvValue(String(value))}`);
+    if (!seen.has(key)) nextLines.push(`${key}=${formatDotenvValue(value)}`);
   }
   fs.writeFileSync(workspaceServerEnv, `${nextLines.filter((line, index, lines) => line.trim() || index < lines.length - 1).join("\r\n")}\r\n`, "utf8");
 }

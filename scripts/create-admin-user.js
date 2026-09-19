@@ -2,26 +2,18 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { pbkdf2Sync, randomBytes } = require("node:crypto");
 const { PrismaClient } = require("@prisma/client");
+const { parseEnvEntries } = require("./env-format");
 
 const root = path.resolve(__dirname, "..");
 const iterations = 120_000;
 const keyLength = 32;
 const digest = "sha256";
 
-function parseEnvFile(filePath) {
+function parseEnvFile(filePath, environment = process.env) {
   if (!filePath || !fs.existsSync(filePath)) return;
-  for (const rawLine of fs.readFileSync(filePath, "utf8").split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const index = line.indexOf("=");
-    if (index < 1) continue;
-    const key = line.slice(0, index).trim();
-    if (process.env[key]) continue;
-    let value = line.slice(index + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    process.env[key] = value;
+  for (const [key, value] of parseEnvEntries(fs.readFileSync(filePath, "utf8"))) {
+    if (environment[key]) continue;
+    environment[key] = value;
   }
 }
 
@@ -145,7 +137,11 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(`[ERROR] ${error instanceof Error ? error.message : String(error)}`);
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    console.error(`[ERROR] ${error instanceof Error ? error.message : String(error)}`);
+    process.exit(1);
+  });
+}
+
+module.exports = { parseEnvFile };

@@ -4,6 +4,7 @@ const http = require("node:http");
 const net = require("node:net");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
+const { parseEnv } = require("./env-format");
 
 const root = path.resolve(__dirname, "..");
 const localPreview = process.argv.includes("--local-preview") || process.argv.includes("--preview");
@@ -54,23 +55,6 @@ const productionEntries = {
 };
 const prismaSchema = path.join(root, "apps", "server", "prisma", "schema.prisma");
 const prismaStateFile = path.join(root, ".chaq-data", "prisma-client-state.json");
-
-function parseEnv(text) {
-  const entries = {};
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith("#")) continue;
-    const index = line.indexOf("=");
-    if (index < 1) continue;
-    const key = line.slice(0, index).trim();
-    let value = line.slice(index + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
-    }
-    entries[key] = value;
-  }
-  return entries;
-}
 
 function command(name) {
   return process.platform === "win32" && !name.endsWith(".cmd") ? `${name}.cmd` : name;
