@@ -12,7 +12,9 @@ import {
   Coins,
   Compass,
   Inbox,
+  MessageCircle,
   Network,
+  PanelRight,
   Pause,
   Play,
   Plus,
@@ -21,6 +23,7 @@ import {
   Save,
   Send,
   Settings2,
+  Smile,
   Sparkles,
   Target,
   UserRound,
@@ -47,6 +50,7 @@ import { LatestRequestGate, isSupersededRequest } from "../lib/latest-request";
 import { PendingMessageKey } from "../lib/message-idempotency";
 import { useConversationMessages } from "../lib/use-conversation-messages";
 import { AgentProfileView } from "./agent-profile";
+import "./agent-workspace.css";
 
 type AgentTab = "chat" | "identity" | "goals" | "memory" | "relationships" | "activity";
 type FieldErrors = Record<string, string>;
@@ -84,6 +88,8 @@ export function AgentWorkspace(props: {
   const [showCreate, setShowCreate] = useState(false);
   const [showExplore, setShowExplore] = useState(false);
   const [agentSearch, setAgentSearch] = useState("");
+  const [directoryTab, setDirectoryTab] = useState<"messages" | "contacts" | "discover">("messages");
+  const [showDetails, setShowDetails] = useState(false);
   const [profileAgentId, setProfileAgentId] = useState<string | null>(null);
   const [profileInitialChat, setProfileInitialChat] = useState(false);
   const selectionRequests = useRef(new LatestRequestGate());
@@ -100,9 +106,27 @@ export function AgentWorkspace(props: {
   const filteredContacts = useMemo(() => {
     const query = agentSearch.trim().toLowerCase();
     return query
-      ? contacts.filter((item) => `${item.agent.name} ${item.agent.handle} ${item.agent.tags.join(" ")}`.toLowerCase().includes(query))
+      ? contacts.filter((item) => `${item.alias ?? ""} ${item.agent.name} ${item.agent.handle} ${item.agent.tags.join(" ")}`.toLowerCase().includes(query))
       : contacts;
   }, [contacts, agentSearch]);
+  const filteredConversations = useMemo(() => {
+    const query = agentSearch.trim().toLowerCase();
+    if (!query) return conversations;
+    return conversations.filter((item) => {
+      const participants = item.participants.map((participant) => {
+        const owned = agents.find((entry) => entry.id === participant.participantId);
+        const contact = contacts.find((entry) => entry.agent.id === participant.participantId);
+        const partner = owned ?? contact?.agent;
+        return `${participant.displayNameSnapshot} ${contact?.alias ?? ""} ${partner?.name ?? ""} ${partner?.handle ?? ""} ${partner?.tags.join(" ") ?? ""}`;
+      }).join(" ");
+      return `${item.title ?? ""} ${item.lastMessage?.content ?? ""} ${participants}`.toLowerCase().includes(query);
+    });
+  }, [conversations, agents, contacts, agentSearch]);
+  const directoryAgents = useMemo(() => {
+    if (directoryTab !== "messages") return filteredAgents;
+    const conversationAgentIds = new Set(conversations.flatMap((item) => item.participants.filter((participant) => participant.participantKind === "agent").map((participant) => participant.participantId)));
+    return filteredAgents.filter((item) => !conversationAgentIds.has(item.id));
+  }, [filteredAgents, conversations, directoryTab]);
 
   useEffect(() => {
     void refreshDirectory();
@@ -123,6 +147,15 @@ export function AgentWorkspace(props: {
     const timer = setInterval(() => void poll(), 10_000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (!showDetails || showCreate || showExplore || profileAgentId) return;
+    const listener = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !event.defaultPrevented) setShowDetails(false);
+    };
+    window.addEventListener("keydown", listener);
+    return () => window.removeEventListener("keydown", listener);
+  }, [showDetails, showCreate, showExplore, profileAgentId]);
 
   useEffect(() => {
     const listener = (event: Event) => {
@@ -326,56 +359,73 @@ export function AgentWorkspace(props: {
   }
 
   return (
-    <section className="agent-os">
+    <section className={showDetails && agent ? "agent-os qq-workspace has-details" : "agent-os qq-workspace"}>
       <aside className="agent-directory">
         <header className="agent-directory-head">
-          <div><Sparkles size={18} /><strong>Agent OS</strong></div>
-          <span className="agent-directory-actions"><button className="icon-only-button" title="发现公开 Agent" onClick={() => setShowExplore(true)}><Compass size={17} /></button><button className="icon-only-button" title="创建 Agent" onClick={() => setShowCreate(true)}><Plus size={17} /></button></span>
+          <div><strong>{directoryTab === "messages" ? "消息" : directoryTab === "contacts" ? "联系人" : "发现"}</strong><span className="qq-directory-count">{directoryTab === "contacts" ? contacts.length + agents.length : conversations.reduce((sum, item) => sum + item.unreadCount, 0) || "Chaq"}</span></div>
+          <span className="agent-directory-actions"><button className="icon-only-button qq-add-button" title="创建 Agent" aria-label="创建 Agent" onClick={() => setShowCreate(true)}><Plus size={19} /></button></span>
         </header>
-        <div className="agent-search"><Bot size={15} /><input value={agentSearch} onChange={(event) => setAgentSearch(event.target.value)} placeholder="搜索 Agent" /></div>
-        <div className="agent-section-label"><span>Agents</span><em>{agents.length}</em></div>
-        <div className="agent-directory-list">
-          {filteredAgents.map((item) => (
-            <button key={item.id} className={item.id === selectedAgentId ? "agent-directory-row active" : "agent-directory-row"} onClick={() => void selectAgent(item.id)}>
-              <AgentAvatar agent={item} />
-              <span><strong>{item.name}</strong><small>{item.tagline || `@${item.handle}`}</small></span>
-              <i className={`agent-status-dot ${item.presence}`} title={presenceLabel(item.presence)} />
-            </button>
-          ))}
-          {!agents.length && <button className="agent-empty-create" onClick={() => setShowCreate(true)}><Plus size={18} />创建第一个 Agent</button>}
+        <label className="agent-search"><Search size={16} /><input value={agentSearch} onChange={(event) => setAgentSearch(event.target.value)} placeholder="搜索 Agent" aria-label="搜索 Agent 和消息" />{agentSearch && <button type="button" title="清空搜索" aria-label="清空搜索" onClick={() => setAgentSearch("")}><X size={13} /></button>}</label>
+        <nav className="qq-directory-tabs" aria-label="通讯导航">
+          <button className={directoryTab === "messages" ? "active" : ""} aria-pressed={directoryTab === "messages"} onClick={() => setDirectoryTab("messages")}><MessageCircle size={16} />消息</button>
+          <button className={directoryTab === "contacts" ? "active" : ""} aria-pressed={directoryTab === "contacts"} onClick={() => setDirectoryTab("contacts")}><Users size={16} />联系人</button>
+          <button className={directoryTab === "discover" ? "active" : ""} aria-pressed={directoryTab === "discover"} onClick={() => setDirectoryTab("discover")}><Compass size={16} />发现</button>
+        </nav>
+        <div className="qq-directory-scroll">
+          {directoryTab === "messages" && conversations.length > 0 && <>
+            <div className="agent-section-label"><span>最近会话</span><em>{filteredConversations.length}</em></div>
+            <div className="agent-inbox-list">
+              {filteredConversations.map((item) => {
+                const participantId = item.participants.find((participant) => participant.participantKind === "agent")?.participantId;
+                const participant = agents.find((entry) => entry.id === participantId) ?? contacts.find((entry) => entry.agent.id === participantId)?.agent;
+                return <button key={item.id} className={item.id === conversationId ? "agent-inbox-row active" : "agent-inbox-row"} onClick={() => void selectConversation(item)}>
+                  {participant ? <AgentAvatar agent={participant} /> : <div className="qq-conversation-avatar"><MessageCircle size={22} /></div>}
+                  <span><strong>{item.title || participant?.name || "会话"}</strong><small>{item.lastMessage?.content || "开始新的对话"}</small></span>
+                  <div className="qq-conversation-meta">{item.lastMessage && <time>{formatTime(item.lastMessage.createdAt)}</time>}{item.unreadCount > 0 && <em>{item.unreadCount > 99 ? "99+" : item.unreadCount}</em>}</div>
+                </button>;
+              })}
+            </div>
+          </>}
+          {directoryTab !== "discover" && <>
+            {(directoryAgents.length > 0 || !agents.length) && <div className="agent-section-label"><span>我的伙伴</span><em>{directoryAgents.length}</em></div>}
+            <div className="agent-directory-list">
+              {directoryAgents.map((item) => (
+                <button key={item.id} className={item.id === selectedAgentId ? "agent-directory-row active" : "agent-directory-row"} onClick={() => void selectAgent(item.id)}>
+                  <AgentAvatar agent={item} />
+                  <span><strong>{item.name}</strong><small>{item.tagline || (item.presence === "thinking" ? "正在思考…" : "点击开始聊天")}</small></span>
+                  {item.unreadCount > 0 && <em className="qq-unread-count">{item.unreadCount > 99 ? "99+" : item.unreadCount}</em>}
+                </button>
+              ))}
+              {!agents.length && <div className="qq-directory-empty"><div><MessageCircle size={25} /></div><strong>从第一位伙伴开始</strong><p>随时聊天，一起完成想做的事。</p><button className="agent-empty-create" onClick={() => setShowCreate(true)}><Plus size={16} />创建第一个 Agent</button></div>}
+            </div>
+            {directoryTab === "contacts" && <>
+              <div className="agent-section-label"><span>我的好友</span><em>{contacts.length}</em></div>
+              <div className="agent-contact-list">
+                {filteredContacts.map((contact) => (
+                  <button key={contact.id} className="agent-directory-row" onClick={() => { setProfileInitialChat(false); setProfileAgentId(contact.agent.id); }}>
+                    <AgentAvatar agent={contact.agent} />
+                    <span><strong>{contact.alias || contact.agent.name}</strong><small>{contact.agent.tagline || (contact.agent.serviceFee ? `服务费 ${contact.agent.serviceFee} token` : "免服务费")}</small></span>
+                  </button>
+                ))}
+                {!contacts.length && <button className="agent-contact-empty" onClick={() => setShowExplore(true)}><UserPlus size={18} />发现公开 Agent 并添加好友</button>}
+              </div>
+            </>}
+            {agentSearch && !directoryAgents.length && (directoryTab === "messages" ? !filteredConversations.length : !filteredContacts.length) && <div className="qq-search-empty"><Search size={24} /><strong>没有找到相关结果</strong><span>试试其他名字或关键词</span></div>}
+          </>}
+          {directoryTab === "discover" && <div className="qq-discovery-card"><div className="qq-discovery-icon"><Compass size={32} /></div><span className="qq-discovery-kicker">MEET YOUR NEXT PARTNER</span><h3>发现更多可能</h3><p>认识有趣的数字伙伴，<br />找到与你合拍的那一位。</p><button onClick={() => setShowExplore(true)}>发现公开 Agent<ArrowDown size={16} /></button><button className="qq-discovery-create" onClick={() => setShowCreate(true)}><Plus size={16} />创建自己的伙伴</button></div>}
         </div>
-        <div className="agent-section-label"><span><Users size={14} />联系人</span><em>{contacts.length}</em></div>
-        <div className="agent-contact-list">
-          {filteredContacts.map((contact) => (
-            <button key={contact.id} className="agent-directory-row" onClick={() => { setProfileInitialChat(false); setProfileAgentId(contact.agent.id); }}>
-              <AgentAvatar agent={contact.agent} />
-              <span><strong>{contact.alias || contact.agent.name}</strong><small>{contact.agent.serviceFee ? `服务费 ${contact.agent.serviceFee} token` : "免服务费"}</small></span>
-              <i className={`agent-status-dot ${contact.agent.presence}`} title={presenceLabel(contact.agent.presence)} />
-            </button>
-          ))}
-          {!contacts.length && <button className="agent-contact-empty" onClick={() => setShowExplore(true)}>发现公开 Agent 并添加好友</button>}
-        </div>
-        <div className="agent-section-label"><span><Inbox size={14} />收件箱</span><em>{conversations.reduce((sum, item) => sum + item.unreadCount, 0)}</em></div>
-        <div className="agent-inbox-list">
-          {conversations.slice(0, 12).map((item) => (
-            <button key={item.id} className={item.id === conversationId ? "agent-inbox-row active" : "agent-inbox-row"} onClick={() => void selectConversation(item)}>
-              <span><strong>{item.title || "会话"}</strong><small>{item.lastMessage?.content || "暂无消息"}</small></span>
-              {item.unreadCount > 0 && <em>{item.unreadCount}</em>}
-            </button>
-          ))}
-        </div>
+        <footer className="qq-directory-footer"><span><i />你的 Chaq 空间</span><button className="icon-only-button" title="刷新列表" aria-label="刷新列表" onClick={() => void refreshDirectory()}><RefreshCw size={15} /></button></footer>
       </aside>
 
       <main className="agent-stage">
         {agent ? (
           <>
             <header className="agent-stage-head">
-              <button className="agent-stage-identity agent-profile-trigger" title="打开个人主页" onClick={() => setProfileAgentId(agent.id)}><AgentAvatar agent={agent} large /><span><h2>{agent.name}</h2><p>@{agent.handle} · {presenceLabel(agent.presence)} · {autonomyLabel(agent.autonomyMode)}</p></span></button>
+              <button className="agent-stage-identity agent-profile-trigger" title="打开个人主页" onClick={() => setProfileAgentId(agent.id)}><AgentAvatar agent={agent} /><span><h2>{agent.name}</h2><p><i className={`agent-status-dot ${agent.presence}`} />{presenceLabel(agent.presence)}<span className="qq-heading-divider">·</span>{agent.tagline || `@${agent.handle}`}</p></span></button>
               <div className="agent-stage-actions">
                 <button title="个人主页" className="icon-only-button" onClick={() => setProfileAgentId(agent.id)}><UserRound size={16} /></button>
                 <button title="刷新" className="icon-only-button" onClick={() => void poll()}><RefreshCw size={16} /></button>
-                <button onClick={() => void togglePause()}>{agent.status === "paused" ? <Play size={16} /> : <Pause size={16} />}{agent.status === "paused" ? "恢复" : "暂停"}</button>
-                <button className="agent-run-button" disabled={busy || agent.status !== "active"} onClick={() => void runNow()}><Zap size={16} />运行</button>
+                <button title="查看聊天详情" aria-label="查看聊天详情" aria-expanded={showDetails} className={showDetails ? "icon-only-button active" : "icon-only-button"} onClick={() => setShowDetails(!showDetails)}><PanelRight size={18} /></button>
               </div>
             </header>
             <nav className="agent-tabs" role="tablist" aria-label="Agent sections">
@@ -387,7 +437,7 @@ export function AgentWorkspace(props: {
               <AgentTabButton active={tab === "activity"} icon={<Activity />} label="活动" onClick={() => setTab("activity")} />
             </nav>
             <div className="agent-stage-body">
-              {tab === "chat" && <AgentChat agent={agent} user={props.user} messages={messages} composer={composer} setComposer={(value) => { messageAttempt.current.contentChanged(conversationIdRef.current, value); setComposer(value); }} busy={busy} thinking={agent.presence === "thinking"} onSubmit={sendMessage} />}
+              {tab === "chat" && <AgentChat agent={agent} user={props.user} messages={messages} composer={composer} setComposer={(value) => { messageAttempt.current.contentChanged(conversationIdRef.current, value); setComposer(value); }} busy={busy} thinking={agent.presence === "thinking"} onSubmit={sendMessage} onOpenMemory={() => setTab("memory")} onOpenGoals={() => setTab("goals")} onOpenActivity={() => setTab("activity")} />}
               {tab === "identity" && <AgentIdentityEditor key={agent.id} agent={agent} providers={props.providers} onSaved={(next) => { setAgent((current) => current?.id === next.id ? next : current); void refreshDirectory(); }} onNotice={props.onNotice} />}
               {tab === "goals" && <AgentGoals agent={agent} onChanged={() => { if (selectedAgentIdRef.current === agent.id) void poll(); }} onNotice={props.onNotice} />}
               {tab === "memory" && <AgentMemoryPanel agent={agent} onChanged={() => { if (selectedAgentIdRef.current === agent.id) void poll(); }} onNotice={props.onNotice} />}
@@ -396,11 +446,13 @@ export function AgentWorkspace(props: {
             </div>
           </>
         ) : (
-          <div className="agent-stage-empty"><Sparkles size={40} /><h2>Agent OS</h2><button onClick={() => setShowCreate(true)}><Plus size={17} />创建 Agent</button></div>
+          <div className="agent-stage-empty">
+            {busy ? <><div className="qq-welcome-mark"><RefreshCw size={32} className="spin" /></div><h2>正在打开会话</h2><p>让对话继续。</p></> : <><div className="qq-welcome-mark"><MessageCircle size={44} strokeWidth={1.5} /><Sparkles className="qq-welcome-sparkle" size={20} /></div><span className="qq-welcome-kicker">HELLO, CHAQ</span><h2>好聊的伙伴，就在这里</h2><p>分享日常，碰撞灵感。<br />从一句「你好」开始新的故事。</p><div className="qq-welcome-actions"><button onClick={() => setShowCreate(true)}><Plus size={17} />创建 Agent</button><button onClick={() => setShowExplore(true)}><Compass size={17} />发现伙伴</button></div><span className="qq-welcome-note">选择左侧伙伴，开始聊天</span></>}
+          </div>
         )}
       </main>
 
-      {agent && <AgentPulse agent={agent} events={activity} />}
+      {agent && showDetails && <aside className="qq-chat-details"><header><strong>聊天详情</strong><button className="icon-only-button" title="关闭详情" aria-label="关闭详情" onClick={() => setShowDetails(false)}><X size={18} /></button></header><div className="qq-details-identity"><AgentAvatar agent={agent} large /><h3>{agent.name}</h3><p>{agent.tagline || `@${agent.handle}`}</p><button onClick={() => setProfileAgentId(agent.id)}>查看个人主页</button></div><div className="qq-details-actions"><button onClick={() => void togglePause()}>{agent.status === "paused" ? <Play size={16} /> : <Pause size={16} />}{agent.status === "paused" ? "恢复" : "暂停"}</button><button className="agent-run-button" disabled={busy || agent.status !== "active"} onClick={() => void runNow()}><Zap size={16} />运行</button></div><AgentPulse agent={agent} events={activity} /></aside>}
       {showExplore && <AgentExplore onClose={() => setShowExplore(false)} onOpenProfile={(id) => { setShowExplore(false); setProfileInitialChat(false); setProfileAgentId(id); }} onChanged={() => void refreshDirectory()} onNotice={props.onNotice} />}
       {showCreate && <CreateAgentDialog providers={props.providers} skills={props.skills} onClose={() => setShowCreate(false)} onCreated={(next) => void created(next)} onNotice={props.onNotice} />}
       {profileAgentId && <AgentProfileView key={profileAgentId} agentId={profileAgentId} user={props.user} initialChatOpen={profileInitialChat} onClose={() => { setProfileAgentId(null); setProfileInitialChat(false); }} onAgentChanged={() => void refreshDirectory()} onNotice={props.onNotice} />}
@@ -476,12 +528,15 @@ function AgentChat(props: {
   busy: boolean;
   thinking: boolean;
   onSubmit: (event: FormEvent) => void;
+  onOpenMemory: () => void;
+  onOpenGoals: () => void;
+  onOpenActivity: () => void;
 }): JSX.Element {
   const listRef = useRef<HTMLDivElement>(null);
-  const endRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [bottomPulse, setBottomPulse] = useState(false);
+  const [showEmoji, setShowEmoji] = useState(false);
   const bottomPulseTimer = useRef<number | null>(null);
   const composerLength = props.composer.length;
   const composerNearLimit = composerLength >= CHAT_COMPOSER_WARN_LENGTH;
@@ -498,7 +553,9 @@ function AgentChat(props: {
   }
 
   function scrollToBottom(behavior: ScrollBehavior = "smooth"): void {
-    endRef.current?.scrollIntoView({ block: "end", behavior });
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const node = listRef.current;
+    if (node) node.scrollTo({ top: node.scrollHeight, behavior: reducedMotion ? "instant" : behavior });
   }
 
   function updateScrollState(): void {
@@ -521,7 +578,8 @@ function AgentChat(props: {
 
   useEffect(() => {
     if (!isAtBottom) return;
-    window.requestAnimationFrame(() => scrollToBottom(props.messages.length > 1 ? "smooth" : "auto"));
+    const frame = window.requestAnimationFrame(() => scrollToBottom(props.messages.length > 1 ? "smooth" : "instant"));
+    return () => window.cancelAnimationFrame(frame);
   }, [props.messages.length, props.thinking, isAtBottom]);
 
   useEffect(() => {
@@ -530,6 +588,7 @@ function AgentChat(props: {
 
   return <div className="agent-chat">
     <div ref={listRef} className={bottomPulse ? "agent-message-list bottom-pulse" : "agent-message-list"} onScroll={updateScrollState}>
+      {props.messages.length > 0 && <div className="qq-chat-date">{new Date(props.messages[0].createdAt).toLocaleDateString("zh-CN", { month: "long", day: "numeric" })}</div>}
       {props.messages.map((message) => {
         const mine = message.authorKind === "user" && message.authorId === props.user.id;
         return <div key={message.id} className={mine ? "agent-message-row mine" : `agent-message-row ${message.authorKind}`}>
@@ -540,11 +599,14 @@ function AgentChat(props: {
       })}
       {props.busy && !props.thinking && <div className="agent-chat-thinking"><AgentAvatar agent={props.agent} /><div className="agent-typing"><i /><i /><i /><span>正在发送消息</span></div></div>}
       {props.thinking && <div className="agent-chat-thinking"><AgentAvatar agent={props.agent} /><div className="agent-typing"><i /><i /><i /><span>{props.agent.name} 正在思考</span></div></div>}
-      {!props.messages.length && <div className="agent-chat-empty"><Bot size={32} /><strong>{props.agent.name}</strong><span>发送第一条消息，或点击运行让 Agent 主动观察当前上下文。</span></div>}
-      <div ref={endRef} />
-      {!isAtBottom && <button className="agent-scroll-bottom" type="button" onClick={() => { scrollToBottom(); setIsAtBottom(true); }}><ArrowDown size={15} />到底部</button>}
+      {!props.messages.length && !props.busy && <div className="agent-chat-empty"><AgentAvatar agent={props.agent} large /><strong>和 {props.agent.name} 开始聊天</strong><span>{props.agent.tagline || "一个想法、一句问候，都可以是好故事的开始。"}</span><div className="qq-conversation-starters"><button type="button" onClick={() => { updateComposer("你好，介绍一下你自己吧"); textareaRef.current?.focus(); }}>打个招呼<Send size={13} /></button><button type="button" onClick={() => { updateComposer("你能帮我做些什么？"); textareaRef.current?.focus(); }}>了解你的伙伴<Sparkles size={13} /></button></div></div>}
     </div>
+    {!isAtBottom && <button className="agent-scroll-bottom" type="button" onClick={() => scrollToBottom()}><ArrowDown size={15} />到底部</button>}
     <form className="agent-composer" onSubmit={props.onSubmit}>
+      <div className="qq-composer-toolbar">
+        <div className="qq-composer-tools"><button type="button" title="表情" aria-label="表情" aria-expanded={showEmoji} className={showEmoji ? "active" : ""} onClick={() => setShowEmoji(!showEmoji)}><Smile size={20} /></button><button type="button" title="知识与记忆" aria-label="知识与记忆" onClick={props.onOpenMemory}><BookOpen size={20} /></button><button type="button" title="目标与任务" aria-label="目标与任务" onClick={props.onOpenGoals}><Target size={20} /></button></div><button type="button" className="qq-history-button" title="活动记录" onClick={props.onOpenActivity}><Clock3 size={18} /><span>活动记录</span></button>
+        {showEmoji && <div className="qq-emoji-picker" role="group" aria-label="选择表情">{["😀", "😊", "😎", "🤔", "❤️", "👍", "🎉", "✨", "☀️", "🌙", "👋", "💡"].map((emoji) => <button key={emoji} type="button" aria-label={`插入 ${emoji}`} onClick={() => { const input = textareaRef.current; const start = input?.selectionStart ?? props.composer.length; const end = input?.selectionEnd ?? start; updateComposer(`${props.composer.slice(0, start)}${emoji}${props.composer.slice(end)}`); setShowEmoji(false); window.requestAnimationFrame(() => { input?.focus(); input?.setSelectionRange(start + emoji.length, start + emoji.length); }); }}>{emoji}</button>)}</div>}
+      </div>
       <div className="agent-composer-input">
         <textarea
           ref={textareaRef}
@@ -556,12 +618,8 @@ function AgentChat(props: {
           aria-label={`发消息给 ${props.agent.name}`}
         />
         {props.composer && <button className="composer-clear" type="button" title="清空输入" aria-label="清空输入" disabled={props.busy} onClick={() => updateComposer("")}><X size={14} /></button>}
-        <div className="composer-meta" aria-live="polite">
-          <span>{props.busy ? "正在发送..." : "Enter 发送 · Shift+Enter 换行"}</span>
-          <span className={composerNearLimit ? "warn" : ""}>{composerLength}/{CHAT_COMPOSER_MAX_LENGTH}</span>
-        </div>
       </div>
-      <button title="发送" aria-label="发送消息" disabled={!canSend}>{props.busy ? <RefreshCw className="spin" size={18} /> : <Send size={18} />}</button>
+      <div className="qq-composer-bottom"><div className="composer-meta" aria-live="polite"><span>{props.busy ? "正在发送..." : "Enter 发送 · Shift+Enter 换行"}</span>{composerLength > 0 && <span className={composerNearLimit ? "warn" : ""}>{composerLength}/{CHAT_COMPOSER_MAX_LENGTH}</span>}</div><button className="qq-send-button" title="发送" aria-label="发送消息" disabled={!canSend}>{props.busy ? <RefreshCw className="spin" size={16} /> : <Send size={16} />}<span>发送</span></button></div>
     </form>
   </div>;
 }
@@ -864,8 +922,8 @@ function AgentActivity(props: { events: AgentEvent[] }): JSX.Element {
 function AgentPulse(props: { agent: AgentDetail; events: AgentEvent[] }): JSX.Element {
   const running = props.agent.recentRuns.find((item) => item.status === "running" || item.status === "queued");
   return <aside className="agent-pulse">
-    <header><Activity size={16} /><strong>Live state</strong></header>
-    <div className="agent-pulse-status"><i className={running ? "running" : ""} /><span><strong>{running ? "运行中" : props.agent.status}</strong><small>{running?.trigger ?? autonomyLabel(props.agent.autonomyMode)}</small></span></div>
+    <header><Activity size={16} /><strong>伙伴状态</strong></header>
+    <div className="agent-pulse-status"><i className={running ? "running" : ""} /><span><strong>{running ? "运行中" : props.agent.status === "paused" ? "已暂停" : props.agent.status === "active" ? "准备就绪" : props.agent.status}</strong><small>{running?.trigger ?? autonomyLabel(props.agent.autonomyMode)}</small></span></div>
     <div className="agent-budget"><span>行动<strong>{props.agent.actionsUsedToday}/{props.agent.dailyActionBudget}</strong></span><em><i style={{ width: `${Math.min(100, props.agent.actionsUsedToday / Math.max(1, props.agent.dailyActionBudget) * 100)}%` }} /></em></div>
     <div className="agent-budget"><span>Token<strong>{props.agent.tokensUsedToday}/{props.agent.dailyTokenBudget}</strong></span><em><i style={{ width: `${Math.min(100, props.agent.tokensUsedToday / Math.max(1, props.agent.dailyTokenBudget) * 100)}%` }} /></em></div>
     <div className="agent-pulse-meta"><span><Target size={14} />{props.agent.goals.filter((item) => item.status === "active").length} 个目标</span><span><Brain size={14} />{props.agent.memories.length} 条记忆</span><span><Users size={14} />{props.agent.relationships.length} 个关系</span><span><Clock3 size={14} />{props.agent.nextRunAt ? formatDate(props.agent.nextRunAt) : "按事件唤醒"}</span></div>
