@@ -21,8 +21,8 @@ const prisma = new PrismaClient();
 
 const defaultSettings = {
   language: "zh",
-  theme: "dark",
-  backgroundUrl: "/assets/chaq-cover.png",
+  theme: "light",
+  backgroundUrl: null,
   backgroundOpacity: 0.42,
   windowOpacity: 1,
   notificationSound: true,

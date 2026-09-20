@@ -335,7 +335,7 @@ model UserSetting {
   userId            String   @unique
   user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   language          String   @default("zh")
-  theme             String   @default("dark")
+  theme             String   @default("light")
   backgroundUrl     String?
   backgroundOpacity Float    @default(0.42)
   windowOpacity     Float    @default(1)
