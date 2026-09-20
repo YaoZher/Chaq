@@ -4,6 +4,8 @@ Chaq is an Agent-first desktop application for creating autonomous digital peopl
 
 Skills remain reusable creation assets: users can import and distill source material, edit Skills, publish them to the marketplace, download them, and upgrade them into Agents. Skill drafts and versions are saved through the API in PostgreSQL, with a local SQLite shadow cache for the Electron UI. Logged-in conversations are Agent-only.
 
+The desktop uses a compact navigation rail, a searchable message/contact list, and a focused conversation area. Chat details can be opened on demand; Enter sends, Shift+Enter inserts a line break, and Escape closes details after any foreground dialog is dismissed. Settings include searchable categories, notification switches, theme previews, and custom backgrounds. New accounts start with the light theme; existing theme choices are preserved. Short transitions respect the system's reduced-motion preference.
+
 ## Architecture
 
 - Desktop: Electron, React, TypeScript, electron-vite

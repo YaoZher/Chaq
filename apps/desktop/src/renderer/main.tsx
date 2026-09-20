@@ -13,15 +13,11 @@ import {
   Download,
   Edit3,
   Flag,
-  Folder,
-  Globe,
-  HardDrive,
   Image as ImageIcon,
   Lock,
   LogOut,
   MessageCircle,
   Minimize2,
-  Moon,
   MoreHorizontal,
   Pin,
   Plus,
@@ -33,18 +29,15 @@ import {
   Settings,
   ShieldCheck,
   Share2,
-  SlidersHorizontal,
   Square,
   Star,
   Store,
-  Sun,
   TrendingUp,
   ThumbsDown,
   ThumbsUp,
   Trash2,
   Upload,
   User,
-  Volume2,
   WalletCards,
   X
 } from "lucide-react";
@@ -75,9 +68,8 @@ import { PendingMessageKey } from "./lib/message-idempotency";
 import { userModelPresets } from "./lib/provider-presets";
 import { MagneticButton, ShinyText, SpotlightCard } from "./components/react-bits";
 import { AgentWorkspace } from "./components/agent-workspace";
-import coverUrl from "./assets/chaq-cover-v2.png";
+import { SettingsPanel, type SettingsCategory } from "./components/settings-panel";
 import defaultAvatarUrl from "./assets/chaq-default-avatar-v2.png";
-import loginBgUrl from "./assets/chaq-login-bg-v2.png";
 import { useSession, type SessionState } from "./lib/use-session";
 import { ModelForm, AdminProviderForm } from "./components/model-forms";
 import { FormField, FieldError } from "./components/form-field";
@@ -94,7 +86,6 @@ import "./styles.css";
 type View = "agents" | "chat" | "skill-editor" | "import" | "market" | "wallet" | "models" | "admin" | "settings";
 type ModelMode = "cloud" | "user";
 type SkillEditorTab = "profile" | "edit" | "share" | "more";
-type SettingsCategory = "general" | "appearance" | "messages" | "storage" | "display";
 
 type LoginMode = "login" | "register";
 type RechargeUnit = "token" | "k" | "m";
@@ -1407,8 +1398,6 @@ function App({ session }: { session: SessionState }): JSX.Element {
   if (booting) {
     return (
       <div className="boot-screen">
-        <div className="login-cover" style={{ backgroundImage: `url(${loginBgUrl})` }} />
-        <LoginBackgroundCanvas />
         <div className="boot-brand">
           <div className="app-logo">C</div>
           <strong>Chaq</strong>
@@ -1422,18 +1411,17 @@ function App({ session }: { session: SessionState }): JSX.Element {
       <div className="settings-window-shell">
         <div className="window-drag-strip" aria-hidden="true" />
         <WindowButtons compact />
-        <ToolPage title={activeSettings.language === "en" ? "Settings" : "用户设置"} subtitle={activeSettings.language === "en" ? "Preferences, notifications, storage and appearance." : "管理 Chaq 的偏好、提示、存储和外观。"}>
-          <SettingsPanel
-            activeSettings={activeSettings}
-            settingsSection={settingsSection}
-            openSettingsSection={openSettingsSection}
-            saveSettings={(next) => void saveSettings(next)}
-            previewSettings={previewSettings}
-            chooseBackgroundImage={() => void chooseBackgroundImage()}
-            user={auth?.user ?? null}
-            onLogout={() => void logout()}
-          />
-        </ToolPage>
+        <SettingsPanel
+          activeSettings={activeSettings}
+          settingsSection={settingsSection}
+          openSettingsSection={openSettingsSection}
+          saveSettings={(next) => void saveSettings(next)}
+          previewSettings={previewSettings}
+          chooseBackgroundImage={() => void chooseBackgroundImage()}
+          user={auth?.user ?? null}
+          onLogout={() => void logout()}
+          onEditProfile={() => void openProfileEditWindow()}
+        />
         <NoticeToast toast={toast} onClose={() => setToast((current) => ({ ...current, visible: false }))} />
       </div>
     );
@@ -1475,8 +1463,7 @@ function App({ session }: { session: SessionState }): JSX.Element {
   if (!auth) {
     return (
       <div className="login-window">
-        <div className="login-cover" style={{ backgroundImage: `url(${loginBgUrl})` }} />
-        <LoginBackgroundCanvas />
+        <div className="window-drag-strip" aria-hidden="true" />
         <WindowButtons compact />
         <div className="login-top-brand">
           <div className="app-logo small">C</div>
@@ -1502,29 +1489,28 @@ function App({ session }: { session: SessionState }): JSX.Element {
             {rememberedAccounts.length === 0 && <div className="remembered-placeholder"><User size={42} /></div>}
           </div>
           <strong>{loginMode === "register" ? "注册 Chaq" : selectedRemembered && !showAccountForm ? selectedRemembered.user.displayName : "登录 Chaq"}</strong>
-          {selectedRemembered && !showAccountForm && <small>{roleLabel(selectedRemembered.user.role)}</small>}
+          <p className="login-welcome">{loginMode === "register" ? "开启你的新对话" : "熟悉的陪伴，随时在这里"}</p>
         </div>
         <SpotlightCard
           as="form"
-          spotlightColor="rgba(82, 211, 178, 0.2)"
           className={loginMode === "register" ? "login-card account-mode register-mode" : showAccountForm || !selectedRemembered ? "login-card account-mode" : "login-card remembered-mode"}
           onSubmit={(event) => void login(event)}
         >
           {loginMode === "register" ? (
             <>
-              <div className="login-field"><label className={fieldClass(loginFieldErrors.email)}><User size={16} /><input aria-invalid={Boolean(loginFieldErrors.email)} value={registerForm.email} onChange={(event) => { setRegisterForm({ ...registerForm, email: event.target.value }); setLoginFieldErrors((current) => clearFieldError(current, "email")); }} placeholder="邮箱" autoFocus /></label><FieldError message={loginFieldErrors.email} /></div>
+              <div className="login-field"><label className={fieldClass(loginFieldErrors.email)}><User size={16} /><input aria-invalid={Boolean(loginFieldErrors.email)} autoComplete="email" value={registerForm.email} onChange={(event) => { setRegisterForm({ ...registerForm, email: event.target.value }); setLoginFieldErrors((current) => clearFieldError(current, "email")); }} placeholder="邮箱" autoFocus /></label><FieldError message={loginFieldErrors.email} /></div>
               <div className="login-code-row">
-                <div className="login-field"><label className={fieldClass(loginFieldErrors.code)}><ShieldCheck size={16} /><input aria-invalid={Boolean(loginFieldErrors.code)} value={registerForm.code} onChange={(event) => { setRegisterForm({ ...registerForm, code: event.target.value }); setLoginFieldErrors((current) => clearFieldError(current, "code")); }} placeholder="邮箱验证码" /></label><FieldError message={loginFieldErrors.code} /></div>
+                <div className="login-field"><label className={fieldClass(loginFieldErrors.code)}><ShieldCheck size={16} /><input aria-invalid={Boolean(loginFieldErrors.code)} autoComplete="one-time-code" value={registerForm.code} onChange={(event) => { setRegisterForm({ ...registerForm, code: event.target.value }); setLoginFieldErrors((current) => clearFieldError(current, "code")); }} placeholder="邮箱验证码" /></label><FieldError message={loginFieldErrors.code} /></div>
                 <button type="button" onClick={() => void sendRegisterCode()} disabled={busy || !registerForm.email.trim()}>发送</button>
               </div>
-              <div className="login-field"><label className={fieldClass(loginFieldErrors.password)}><Lock size={16} /><input aria-invalid={Boolean(loginFieldErrors.password)} type="password" value={registerForm.password} onChange={(event) => { setRegisterForm({ ...registerForm, password: event.target.value }); setLoginFieldErrors((current) => clearFieldError(current, "password")); }} placeholder="密码，至少 8 位且包含字母和数字" /></label><FieldError message={loginFieldErrors.password} /></div>
-              <div className="login-field"><label className={fieldClass(loginFieldErrors.confirmPassword)}><Lock size={16} /><input aria-invalid={Boolean(loginFieldErrors.confirmPassword)} type="password" value={registerForm.confirmPassword} onChange={(event) => { setRegisterForm({ ...registerForm, confirmPassword: event.target.value }); setLoginFieldErrors((current) => clearFieldError(current, "confirmPassword")); }} placeholder="再次输入密码" /></label><FieldError message={loginFieldErrors.confirmPassword} /></div>
+              <div className="login-field"><label className={fieldClass(loginFieldErrors.password)}><Lock size={16} /><input aria-invalid={Boolean(loginFieldErrors.password)} type="password" autoComplete="new-password" value={registerForm.password} onChange={(event) => { setRegisterForm({ ...registerForm, password: event.target.value }); setLoginFieldErrors((current) => clearFieldError(current, "password")); }} placeholder="密码，至少 8 位且包含字母和数字" /></label><FieldError message={loginFieldErrors.password} /></div>
+              <div className="login-field"><label className={fieldClass(loginFieldErrors.confirmPassword)}><Lock size={16} /><input aria-invalid={Boolean(loginFieldErrors.confirmPassword)} type="password" autoComplete="new-password" value={registerForm.confirmPassword} onChange={(event) => { setRegisterForm({ ...registerForm, confirmPassword: event.target.value }); setLoginFieldErrors((current) => clearFieldError(current, "confirmPassword")); }} placeholder="再次输入密码" /></label><FieldError message={loginFieldErrors.confirmPassword} /></div>
               <label className="remember-check"><input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} />记住我</label>
             </>
           ) : showAccountForm || !selectedRemembered ? (
             <>
-              <div className="login-field"><label className={fieldClass(loginFieldErrors.username)}><User size={16} /><input aria-invalid={Boolean(loginFieldErrors.username)} value={loginForm.username} onChange={(event) => { setLoginForm({ ...loginForm, username: event.target.value }); setLoginFieldErrors((current) => clearFieldError(current, "username")); }} placeholder="邮箱 / 账号" autoFocus /></label><FieldError message={loginFieldErrors.username} /></div>
-              <div className="login-field"><label className={fieldClass(loginFieldErrors.password)}><Lock size={16} /><input aria-invalid={Boolean(loginFieldErrors.password)} type="password" value={loginForm.password} onChange={(event) => { setLoginForm({ ...loginForm, password: event.target.value }); setLoginFieldErrors((current) => clearFieldError(current, "password")); }} placeholder="密码" /></label><FieldError message={loginFieldErrors.password} /></div>
+              <div className="login-field"><label className={fieldClass(loginFieldErrors.username)}><User size={16} /><input aria-invalid={Boolean(loginFieldErrors.username)} autoComplete="username" value={loginForm.username} onChange={(event) => { setLoginForm({ ...loginForm, username: event.target.value }); setLoginFieldErrors((current) => clearFieldError(current, "username")); }} placeholder="邮箱 / 账号" autoFocus /></label><FieldError message={loginFieldErrors.username} /></div>
+              <div className="login-field"><label className={fieldClass(loginFieldErrors.password)}><Lock size={16} /><input aria-invalid={Boolean(loginFieldErrors.password)} type="password" autoComplete="current-password" value={loginForm.password} onChange={(event) => { setLoginForm({ ...loginForm, password: event.target.value }); setLoginFieldErrors((current) => clearFieldError(current, "password")); }} placeholder="密码" /></label><FieldError message={loginFieldErrors.password} /></div>
               <label className="remember-check"><input type="checkbox" checked={rememberMe} onChange={(event) => setRememberMe(event.target.checked)} />记住我</label>
             </>
           ) : null}
@@ -1540,8 +1526,8 @@ function App({ session }: { session: SessionState }): JSX.Element {
               <button type="button" className="text-button" onClick={() => { setShowAccountForm(true); setLoginMode("register"); setLoginError(""); setLoginFieldErrors({}); }}>注册账号</button>
             )}
           </div>
-          <div className="login-hints"><span>Chaq Skill Messenger</span></div>
         </SpotlightCard>
+        <div className="login-footer">Chaq · 让每一次交流都有回响</div>
       </div>
     );
   }
@@ -1553,11 +1539,11 @@ function App({ session }: { session: SessionState }): JSX.Element {
   return (
     <div
       className="qq-shell"
-      style={{
-        backgroundImage: `linear-gradient(rgba(18,18,24,var(--window-opacity)), rgba(18,18,24,var(--window-opacity))), url(${activeSettings?.backgroundUrl || coverUrl})`
-      }}
+      style={activeSettings?.backgroundUrl ? {
+        backgroundImage: `linear-gradient(var(--wallpaper-overlay), var(--wallpaper-overlay)), url(${JSON.stringify(activeSettings.backgroundUrl)})`
+      } : undefined}
     >
-      <TitleBar user={auth.user} serverStatus={serverStatus} busy={busy} />
+      <TitleBar title={{ agents: "消息", chat: "聊天", "skill-editor": "角色", import: "导入", market: "发现", wallet: "钱包", models: "模型", admin: "后台", settings: "设置" }[view]} serverStatus={serverStatus} busy={busy} />
       <GlobalBusyIndicator active={busy} />
       <div className={["agents", "wallet", "models", "admin", "settings"].includes(view) ? "app-body agent-mode" : "app-body"}>
         <aside className="icon-rail">
@@ -1568,9 +1554,9 @@ function App({ session }: { session: SessionState }): JSX.Element {
           >
             <img src={auth.user.avatarUrl || defaultAvatarUrl} alt="" onError={fallbackImage} /><span />
           </button>
-          <RailButton active={view === "agents"} title="Agent OS" icon={<Bot />} onClick={() => setView("agents")} />
+          <RailButton active={view === "agents"} title="消息" icon={<MessageCircle />} onClick={() => setView("agents")} />
           <RailButton active={view === "import"} title="导入" icon={<Upload />} onClick={() => setView("import")} />
-          <RailButton active={view === "market"} title="广场" icon={<Store />} onClick={() => setView("market")} />
+          <RailButton active={view === "market"} title="发现" icon={<Store />} onClick={() => setView("market")} />
           <RailButton active={view === "wallet"} title="钱包" icon={<WalletCards />} onClick={() => { setView("wallet"); void refreshWallet(); }} />
           <RailButton active={view === "models"} title="模型" icon={<Cpu />} onClick={() => setView("models")} />
           {isAdmin && <RailButton active={view === "admin"} title="后台" icon={<ShieldCheck />} onClick={() => setView("admin")} />}
@@ -1615,7 +1601,7 @@ function App({ session }: { session: SessionState }): JSX.Element {
                 </div>
               </header>
               <div ref={skillMessagePaneRef} className={skillChatBottomPulse ? "message-pane bottom-pulse" : "message-pane"} onScroll={updateSkillChatScrollState}>
-                {!selectedSkill && <div className="empty-chat"><img src={loginBgUrl} alt="" /><strong>还没有选择 Skill</strong><span>左侧列表会像 QQ 联系人一样展示你的 Skill。</span></div>}
+                {!selectedSkill && <div className="empty-chat"><MessageCircle size={48} /><strong>开始新的聊天</strong><span>从左侧选择一个角色，聊聊今天的想法。</span></div>}
                 {selectedSkill && messages.length === 0 && <div className="empty-chat"><img src={selectedSkill.avatarUrl || defaultAvatarUrl} alt="" onError={fallbackImage} /><strong>还没有聊天</strong><span>向这个 Skill 发送第一句话。</span></div>}
                 {messages.map((message) => (
                   <div key={message.id} className={`msg ${message.role}`}>
@@ -1907,106 +1893,17 @@ function App({ session }: { session: SessionState }): JSX.Element {
           )}
 
           {view === "settings" && activeSettings && (
-            <ToolPage title="用户设置" subtitle="管理 Chaq 的偏好、提示、存储和外观。">
-              <div className="settings-layout">
-                <nav className="settings-nav" aria-label="Settings sections">
-                  <button type="button" className={settingsSection === "general" ? "active" : ""} onClick={() => openSettingsSection("general")}><Settings size={16} />通用</button>
-                  <button type="button" className={settingsSection === "appearance" ? "active" : ""} onClick={() => openSettingsSection("appearance")}><ImageIcon size={16} />外观</button>
-                  <button type="button" className={settingsSection === "messages" ? "active" : ""} onClick={() => openSettingsSection("messages")}><Bell size={16} />消息提示</button>
-                  <button type="button" className={settingsSection === "storage" ? "active" : ""} onClick={() => openSettingsSection("storage")}><HardDrive size={16} />存储</button>
-                  <button type="button" className={settingsSection === "display" ? "active" : ""} onClick={() => openSettingsSection("display")}><SlidersHorizontal size={16} />显示</button>
-                </nav>
-                <div className="settings-content">
-                  {settingsSection === "general" && <section className="settings-section">
-                    <header>
-                      <h3>通用</h3>
-                    </header>
-                    <div className="settings-row">
-                      <div>
-                        <strong><Globe size={16} />语言</strong>
-                        <span>选择界面显示语言。</span>
-                      </div>
-                      <select value={activeSettings.language} onChange={(event) => void saveSettings({ language: event.target.value as "zh" | "en" })}>
-                        <option value="zh">中文</option>
-                        <option value="en">English</option>
-                      </select>
-                    </div>
-                    <div className="settings-row">
-                      <div>
-                        <strong>{activeSettings.theme === "light" ? <Sun size={16} /> : <Moon size={16} />}主题</strong>
-                        <span>切换深色、浅色或系统主题。</span>
-                      </div>
-                      <select value={activeSettings.theme} onChange={(event) => void saveSettings({ theme: event.target.value as UserSettings["theme"] })}>
-                        <option value="dark">深色</option>
-                        <option value="light">浅色</option>
-                        <option value="system">跟随系统</option>
-                      </select>
-                    </div>
-                  </section>}
-
-                  {settingsSection === "appearance" && <section className="settings-section">
-                    <header>
-                      <h3>背景</h3>
-                    </header>
-                    <div className="background-setting">
-                      <img src={activeSettings.backgroundUrl || coverUrl} alt="" />
-                      <div className="background-actions">
-                        <button onClick={() => void chooseBackgroundImage()}><ImageIcon size={16} />更改背景图</button>
-                        <button className="text-button" onClick={() => void saveSettings({ backgroundUrl: null })}>恢复默认</button>
-                      </div>
-                    </div>
-                  </section>}
-
-                  {settingsSection === "messages" && <section className="settings-section">
-                    <header>
-                      <h3>消息提示</h3>
-                    </header>
-                    <div className="settings-row">
-                      <div><strong><Volume2 size={16} />开启消息提示音</strong><span>收到 Skill 消息时播放提示音。</span></div>
-                      <label className="switch-row"><input type="checkbox" checked={activeSettings.notificationSound ?? true} onChange={(event) => void saveSettings({ notificationSound: event.target.checked })} />开启</label>
-                    </div>
-                    <div className="settings-row">
-                      <div><strong><BellOff size={16} />图标闪烁</strong><span>新消息到达时突出显示窗口图标。</span></div>
-                      <label className="switch-row"><input type="checkbox" checked={activeSettings.iconFlash ?? true} onChange={(event) => void saveSettings({ iconFlash: event.target.checked })} />开启</label>
-                    </div>
-                  </section>}
-
-                  {settingsSection === "storage" && <section className="settings-section">
-                    <header>
-                      <h3>存储</h3>
-                    </header>
-                    <div className="settings-row storage-row">
-                      <div><strong><HardDrive size={16} />本地应用数据</strong><span>默认使用项目或程序目录下的 .chaq-data/user-data；目录不可写时才回退到桌面 Chaq/user-data。</span></div>
-                    </div>
-                    <div className="settings-row storage-row">
-                      <div><strong><Folder size={16} />路径覆盖</strong><span>当前不支持在运行中迁移数据。如需固定到其他磁盘，请在启动前设置 CHAQ_ENV_ROOT。</span></div>
-                    </div>
-                  </section>}
-
-                  {settingsSection === "display" && <section className="settings-section">
-                    <header>
-                      <h3>透明度</h3>
-                    </header>
-                    <SettingRange
-                      label="背景遮罩"
-                      value={activeSettings.backgroundOpacity}
-                      min={0}
-                      max={0.85}
-                      onChange={(value) => previewSettings({ backgroundOpacity: value })}
-                      onCommit={(value) => void saveSettings({ backgroundOpacity: value })}
-                    />
-                    <SettingRange
-                      label="窗口透明度"
-                      value={activeSettings.windowOpacity}
-                      min={0.7}
-                      max={1}
-                      onChange={(value) => previewSettings({ windowOpacity: value })}
-                      onCommit={(value) => void saveSettings({ windowOpacity: value })}
-                    />
-                  </section>}
-                </div>
-              </div>
-            </ToolPage>
+            <SettingsPanel
+              activeSettings={activeSettings}
+              settingsSection={settingsSection}
+              openSettingsSection={openSettingsSection}
+              saveSettings={(next) => void saveSettings(next)}
+              previewSettings={previewSettings}
+              chooseBackgroundImage={() => void chooseBackgroundImage()}
+              user={auth.user}
+              onLogout={() => void logout()}
+              onEditProfile={() => void openProfileEditWindow()}
+            />
           )}
 
         </main>
@@ -2025,144 +1922,6 @@ function rectToAnchor(rect: DOMRect): WindowAnchorRect {
   };
 }
 
-function LoginBackgroundCanvas(): JSX.Element {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const context = canvas?.getContext("2d");
-    if (!canvas || !context) return;
-
-    let width = 0;
-    let height = 0;
-    let frame = 0;
-    let lastPaint = 0;
-    let targetX = 0;
-    let targetY = 0;
-    let cursorX = 0;
-    let cursorY = 0;
-    const glyphLayer = document.createElement("canvas");
-    const glyphContext = glyphLayer.getContext("2d");
-    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const paintInterval = 1000 / 24;
-
-    const hashValue = (value: number) => {
-      const next = Math.sin(value * 12.9898) * 43758.5453;
-      return next - Math.floor(next);
-    };
-    const glyphs = ["0", "1", "+", "·"];
-
-    const buildGlyphLayer = (dpr: number) => {
-      if (!glyphContext) return;
-      glyphLayer.width = Math.floor(width * dpr);
-      glyphLayer.height = Math.floor(height * dpr);
-      glyphContext.setTransform(dpr, 0, 0, dpr, 0, 0);
-      glyphContext.clearRect(0, 0, width, height);
-
-      const step = 26;
-      glyphContext.lineWidth = 0.65;
-      glyphContext.strokeStyle = "rgba(205, 218, 228, 0.035)";
-      glyphContext.beginPath();
-      for (let x = step; x < width; x += step) {
-        glyphContext.moveTo(x + 0.5, 0);
-        glyphContext.lineTo(x + 0.5, height);
-      }
-      for (let y = step; y < height; y += step) {
-        glyphContext.moveTo(0, y + 0.5);
-        glyphContext.lineTo(width, y + 0.5);
-      }
-      glyphContext.stroke();
-
-      glyphContext.font = "10px Consolas, monospace";
-      glyphContext.textAlign = "center";
-      glyphContext.textBaseline = "middle";
-      let index = 0;
-      for (let y = step; y < height; y += step) {
-        for (let x = step; x < width; x += step) {
-          const seed = hashValue(index + x * 0.13 + y * 0.29);
-          index += 1;
-          if (seed > 0.52 || Math.hypot(x - width * 0.5, y - 170) < 76) continue;
-          glyphContext.fillStyle = `rgba(225, 232, 237, ${0.045 + seed * 0.055})`;
-          glyphContext.fillText(glyphs[Math.floor(seed * glyphs.length) % glyphs.length], x, y);
-        }
-      }
-    };
-
-    const resize = () => {
-      const rect = canvas.getBoundingClientRect();
-      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
-      width = Math.max(1, rect.width);
-      height = Math.max(1, rect.height);
-      canvas.width = Math.floor(width * dpr);
-      canvas.height = Math.floor(height * dpr);
-      context.setTransform(dpr, 0, 0, dpr, 0, 0);
-      targetX = width * 0.5;
-      targetY = height * 0.45;
-      cursorX = targetX;
-      cursorY = targetY;
-      buildGlyphLayer(dpr);
-    };
-
-    const moveCursor = (clientX: number, clientY: number) => {
-      const rect = canvas.getBoundingClientRect();
-      targetX = clientX - rect.left;
-      targetY = clientY - rect.top;
-    };
-
-    const draw = (now: number) => {
-      if (!reducedMotion) frame = requestAnimationFrame(draw);
-      if (document.hidden || now - lastPaint < paintInterval) return;
-      lastPaint = now;
-      context.clearRect(0, 0, width, height);
-      context.drawImage(glyphLayer, 0, 0, width, height);
-      if (reducedMotion) return;
-      context.globalCompositeOperation = "lighter";
-
-      for (let lane = 0; lane < 2; lane += 1) {
-        const y = height * (0.29 + lane * 0.3) + Math.sin(now * 0.00024 + lane * 1.7) * 14;
-        const drift = (now * (lane ? 0.010 : 0.013) + lane * 210) % (width + 320) - 160;
-        const gradient = context.createLinearGradient(drift - 210, y, drift + 210, y + 24);
-        gradient.addColorStop(0, "rgba(80, 214, 167, 0)");
-        gradient.addColorStop(0.5, lane ? "rgba(118, 167, 255, 0.14)" : "rgba(80, 214, 167, 0.16)");
-        gradient.addColorStop(1, "rgba(80, 214, 167, 0)");
-        context.strokeStyle = gradient;
-        context.lineWidth = 1;
-        context.beginPath();
-        context.moveTo(-30, y);
-        context.bezierCurveTo(width * 0.27, y - 34, width * 0.63, y + 38, width + 30, y - 18);
-        context.stroke();
-      }
-
-      cursorX += (targetX - cursorX) * 0.12;
-      cursorY += (targetY - cursorY) * 0.12;
-      const halo = context.createRadialGradient(cursorX, cursorY, 0, cursorX, cursorY, 110);
-      halo.addColorStop(0, "rgba(80, 214, 167, 0.10)");
-      halo.addColorStop(0.46, "rgba(112, 177, 235, 0.045)");
-      halo.addColorStop(1, "rgba(80, 214, 167, 0)");
-      context.fillStyle = halo;
-      context.fillRect(cursorX - 110, cursorY - 110, 220, 220);
-
-      context.globalCompositeOperation = "source-over";
-    };
-
-    const handlePointerMove = (event: PointerEvent) => moveCursor(event.clientX, event.clientY);
-
-    resize();
-    const observer = new ResizeObserver(resize);
-    observer.observe(canvas);
-    window.addEventListener("pointermove", handlePointerMove);
-    frame = requestAnimationFrame(draw);
-
-    return () => {
-      observer.disconnect();
-      window.removeEventListener("pointermove", handlePointerMove);
-      cancelAnimationFrame(frame);
-    };
-  }, []);
-
-  return <canvas className="login-effects" ref={canvasRef} aria-hidden="true" />;
-}
-
 function WindowButtons({ compact = false }: { compact?: boolean }): JSX.Element {
   return (
     <div className={compact ? "window-buttons compact" : "window-buttons"}>
@@ -2173,10 +1932,10 @@ function WindowButtons({ compact = false }: { compact?: boolean }): JSX.Element 
   );
 }
 
-function TitleBar({ user, serverStatus, busy }: { user: LoginUser; serverStatus: ServerStatus; busy: boolean }): JSX.Element {
+function TitleBar({ title, serverStatus, busy }: { title: string; serverStatus: ServerStatus; busy: boolean }): JSX.Element {
   return (
     <header className="title-bar">
-      <div className="drag-title"><span className="qq-dot">Chaq</span><strong>{user.displayName}</strong><em>{roleLabel(user.role)}</em></div>
+      <div className="drag-title"><span className="qq-dot">Chaq</span><strong>{title}</strong></div>
       <div className="title-status" aria-live="polite">
         <ServerStatusPill status={serverStatus} />
         {busy && <span className="title-sync"><RefreshCw className="spin" size={13} />处理中</span>}
@@ -2187,7 +1946,7 @@ function TitleBar({ user, serverStatus, busy }: { user: LoginUser; serverStatus:
 }
 
 function ServerStatusPill({ status }: { status: ServerStatus }): JSX.Element {
-  const label = status === "online" ? "服务器在线" : status === "offline" ? "服务器离线" : "检查连接";
+  const label = status === "online" ? "已连接" : status === "offline" ? "未连接" : "连接中";
   const icon = status === "online"
     ? <Check size={13} />
     : status === "offline"
@@ -2217,7 +1976,7 @@ function NoticeToast(props: { toast: NoticeToastState; onClose: () => void }): J
 }
 
 function RailButton(props: { active: boolean; title: string; icon: JSX.Element; onClick: () => void }): JSX.Element {
-  return <MagneticButton className={props.active ? "rail-button active" : "rail-button"} title={props.title} aria-label={props.title} aria-current={props.active ? "page" : undefined} onClick={props.onClick}>{React.cloneElement(props.icon, { size: 22 })}</MagneticButton>;
+  return <MagneticButton className={props.active ? "rail-button active" : "rail-button"} title={props.title} aria-label={props.title} aria-current={props.active ? "page" : undefined} onClick={props.onClick}><span className="rail-button-icon">{React.cloneElement(props.icon, { size: 22 })}</span><span className="rail-button-label">{props.title}</span></MagneticButton>;
 }
 
 function ToolPage(props: { title: string; subtitle: string; children: React.ReactNode }): JSX.Element {
@@ -2410,115 +2169,6 @@ function ProfileEditPanel(props: {
   );
 }
 
-function SettingsPanel(props: {
-  activeSettings: UserSettings;
-  settingsSection: SettingsCategory;
-  openSettingsSection: (section: SettingsCategory) => void;
-  saveSettings: (next: Partial<UserSettings>) => void;
-  previewSettings: (next: Partial<UserSettings>) => void;
-  chooseBackgroundImage: () => void;
-  user: LoginUser | null;
-  onLogout: () => void;
-}): JSX.Element {
-  const en = props.activeSettings.language === "en";
-  const text = {
-    general: en ? "General" : "通用",
-    appearance: en ? "Appearance" : "外观",
-    messages: en ? "Notifications" : "消息提示",
-    storage: en ? "Storage" : "存储",
-    display: en ? "Display" : "显示",
-    language: en ? "Language" : "语言",
-    theme: en ? "Theme" : "主题",
-    background: en ? "Background" : "背景",
-    sound: en ? "Message sound" : "开启消息提示音",
-    flash: en ? "Icon flash" : "图标闪烁",
-    chatPath: en ? "Local application data" : "本地应用数据",
-    filePath: en ? "Path override" : "路径覆盖",
-    change: en ? "Change" : "更改",
-    reset: en ? "Reset" : "恢复默认",
-    dark: en ? "Dark" : "深色",
-    light: en ? "Light" : "浅色",
-    system: en ? "System" : "跟随系统",
-    on: en ? "On" : "开启",
-    bgOpacity: en ? "Background mask" : "背景遮罩",
-    windowOpacity: en ? "Window opacity" : "窗口透明度"
-  };
-
-  return (
-    <div className="settings-layout">
-      <nav className="settings-nav" aria-label="Settings sections">
-        <button type="button" className={props.settingsSection === "general" ? "active" : ""} onClick={() => props.openSettingsSection("general")}><Settings size={16} />{text.general}</button>
-        <button type="button" className={props.settingsSection === "appearance" ? "active" : ""} onClick={() => props.openSettingsSection("appearance")}><ImageIcon size={16} />{text.appearance}</button>
-        <button type="button" className={props.settingsSection === "messages" ? "active" : ""} onClick={() => props.openSettingsSection("messages")}><Bell size={16} />{text.messages}</button>
-        <button type="button" className={props.settingsSection === "storage" ? "active" : ""} onClick={() => props.openSettingsSection("storage")}><HardDrive size={16} />{text.storage}</button>
-        <button type="button" className={props.settingsSection === "display" ? "active" : ""} onClick={() => props.openSettingsSection("display")}><SlidersHorizontal size={16} />{text.display}</button>
-        <div className="settings-nav-spacer" />
-        {props.user && <div className="settings-account"><img src={props.user.avatarUrl || defaultAvatarUrl} alt="" onError={fallbackImage} /><span><strong>{props.user.displayName}</strong><small>{props.user.email || props.user.username}</small></span></div>}
-        <button type="button" className="settings-logout" onClick={props.onLogout}><LogOut size={16} />{en ? "Sign out" : "退出登录"}</button>
-      </nav>
-      <div className="settings-content">
-        {props.settingsSection === "general" && <SpotlightCard as="section" className="settings-section">
-          <header><h3>{text.general}</h3></header>
-          <div className="settings-row">
-            <div><strong><Globe size={16} />{text.language}</strong></div>
-            <select value={props.activeSettings.language} onChange={(event) => props.saveSettings({ language: event.target.value as "zh" | "en" })}>
-              <option value="zh">中文</option>
-              <option value="en">English</option>
-            </select>
-          </div>
-          <div className="settings-row">
-            <div><strong>{props.activeSettings.theme === "light" ? <Sun size={16} /> : <Moon size={16} />}{text.theme}</strong></div>
-            <select value={props.activeSettings.theme} onChange={(event) => props.saveSettings({ theme: event.target.value as UserSettings["theme"] })}>
-              <option value="dark">{text.dark}</option>
-              <option value="light">{text.light}</option>
-              <option value="system">{text.system}</option>
-            </select>
-          </div>
-        </SpotlightCard>}
-
-        {props.settingsSection === "appearance" && <SpotlightCard as="section" className="settings-section">
-          <header><h3>{text.background}</h3></header>
-          <div className="background-setting">
-            <img src={props.activeSettings.backgroundUrl || coverUrl} alt="" />
-            <div className="background-actions">
-              <button onClick={props.chooseBackgroundImage}><ImageIcon size={16} />{text.change}</button>
-              <button className="text-button" onClick={() => props.saveSettings({ backgroundUrl: null })}>{text.reset}</button>
-            </div>
-          </div>
-        </SpotlightCard>}
-
-        {props.settingsSection === "messages" && <SpotlightCard as="section" className="settings-section">
-          <header><h3>{text.messages}</h3></header>
-          <div className="settings-row">
-            <div><strong><Volume2 size={16} />{text.sound}</strong></div>
-            <label className="switch-row"><input type="checkbox" checked={props.activeSettings.notificationSound ?? true} onChange={(event) => props.saveSettings({ notificationSound: event.target.checked })} />{text.on}</label>
-          </div>
-          <div className="settings-row">
-            <div><strong><BellOff size={16} />{text.flash}</strong></div>
-            <label className="switch-row"><input type="checkbox" checked={props.activeSettings.iconFlash ?? true} onChange={(event) => props.saveSettings({ iconFlash: event.target.checked })} />{text.on}</label>
-          </div>
-        </SpotlightCard>}
-
-        {props.settingsSection === "storage" && <SpotlightCard as="section" className="settings-section">
-          <header><h3>{text.storage}</h3></header>
-          <div className="settings-row storage-row">
-            <div><strong><HardDrive size={16} />{text.chatPath}</strong><span>{en ? "Uses .chaq-data/user-data beside the project or executable; falls back to Desktop/Chaq only when that directory is not writable." : "默认使用项目或程序目录下的 .chaq-data/user-data；目录不可写时才回退到桌面 Chaq/user-data。"}</span></div>
-          </div>
-          <div className="settings-row storage-row">
-            <div><strong><Folder size={16} />{text.filePath}</strong><span>{en ? "Runtime migration is not supported. Set CHAQ_ENV_ROOT before launch to place the data root on another drive." : "当前不支持在运行中迁移数据。如需固定到其他磁盘，请在启动前设置 CHAQ_ENV_ROOT。"}</span></div>
-          </div>
-        </SpotlightCard>}
-
-        {props.settingsSection === "display" && <SpotlightCard as="section" className="settings-section">
-          <header><h3>{text.display}</h3></header>
-          <SettingRange label={text.bgOpacity} value={props.activeSettings.backgroundOpacity} min={0} max={0.85} onChange={(value) => props.previewSettings({ backgroundOpacity: value })} onCommit={(value) => props.saveSettings({ backgroundOpacity: value })} />
-          <SettingRange label={text.windowOpacity} value={props.activeSettings.windowOpacity} min={0.7} max={1} onChange={(value) => props.previewSettings({ windowOpacity: value })} onCommit={(value) => props.saveSettings({ windowOpacity: value })} />
-        </SpotlightCard>}
-      </div>
-    </div>
-  );
-}
-
 function SkillEditorPage(props: {
   tab: SkillEditorTab;
   setTab: (tab: SkillEditorTab) => void;
@@ -2662,7 +2312,7 @@ function SkillEditorPage(props: {
         <header>
           <div>
             <h2>{props.skill ? "Skill 详情" : "添加 Skill"}</h2>
-            <p>{props.skill ? "像 QQ 联系人详情一样管理这个 Skill。" : "填写完成并同步服务器后，会添加到本地列表。"}</p>
+            <p>{props.skill ? "管理角色资料、个性和聊天偏好。" : "填写完成并同步服务器后，会添加到本地列表。"}</p>
           </div>
           <button className="primary-button" disabled={props.busy} onClick={props.onSave}><Check size={16} />{props.skill ? "保存" : "保存并同步"}</button>
         </header>
@@ -2797,41 +2447,6 @@ function SkillInspector({ draft, setDraft, save, busy }: { draft: SkillDraft; se
       <FormField label="标签"><input value={draft.tags.join(", ")} onChange={(event) => update("tags", splitTags(event.target.value))} /></FormField>
       <button onClick={submit} disabled={busy}><Save size={16} />保存 Skill</button>
     </aside>
-  );
-}
-
-function SettingRange(props: {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  onChange: (value: number) => void;
-  onCommit: (value: number) => void;
-}): JSX.Element {
-  const percent = ((props.value - props.min) / (props.max - props.min)) * 100;
-  const commit = (event: React.SyntheticEvent<HTMLInputElement>) => {
-    props.onCommit(Number(event.currentTarget.value));
-  };
-
-  return (
-    <label className="settings-range">
-      <span>
-        <strong>{props.label}</strong>
-        <em>{props.value.toFixed(2)}</em>
-      </span>
-      <input
-        type="range"
-        min={props.min}
-        max={props.max}
-        step="0.01"
-        value={props.value}
-        style={{ "--range-fill": `${percent}%` } as React.CSSProperties}
-        onChange={(event) => props.onChange(Number(event.target.value))}
-        onPointerUp={commit}
-        onBlur={commit}
-        onKeyUp={commit}
-      />
-    </label>
   );
 }
 
