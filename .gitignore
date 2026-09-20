@@ -16,6 +16,8 @@ release-preview/
 coverage/
 *.log
 .logs/
+.playwright-cli/
+/output/playwright/
 .env*
 !.env.example
 !.env.production.example
