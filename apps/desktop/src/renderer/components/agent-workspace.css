@@ -182,7 +182,10 @@
 .qq-workspace .agent-pulse { display: flex; flex-direction: column; gap: 18px; padding: 20px; border: 0; background: var(--panel); box-shadow: none; backdrop-filter: none; }
 .qq-workspace .agent-pulse header { min-height: 0; color: var(--text); font-size: 12px; }
 .qq-workspace .agent-pulse header svg { color: var(--accent); }
-.qq-workspace .agent-pulse-status { background: var(--panel-soft); border: 1px solid var(--line); border-radius: 10px; }
+.qq-workspace .agent-pulse-status { padding: 10px 12px; background: var(--panel-soft); border: 1px solid var(--line); border-radius: 10px; }
+.qq-workspace .agent-pulse-status > i { background: var(--muted); }
+.qq-workspace .agent-pulse-status > i.running { background: var(--success); }
+.qq-workspace .agent-pulse-status span { gap: 3px; line-height: 1.5; }
 .qq-workspace .agent-pulse-status strong { font-size: 12px; }
 .qq-workspace .agent-pulse-status small,
 .qq-workspace .agent-pulse-meta span { color: var(--muted); font-size: 10px; }
