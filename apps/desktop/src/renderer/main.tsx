@@ -1,4 +1,4 @@
-import React, { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import React, { FormEvent, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   AlertCircle,
@@ -68,6 +68,7 @@ import { PendingMessageKey } from "./lib/message-idempotency";
 import { userModelPresets } from "./lib/provider-presets";
 import { MagneticButton, ShinyText, SpotlightCard } from "./components/react-bits";
 import { AgentWorkspace } from "./components/agent-workspace";
+import { MotionPanel } from "./components/motion-panel";
 import { SettingsPanel, type SettingsCategory } from "./components/settings-panel";
 import defaultAvatarUrl from "./assets/chaq-default-avatar-v2.png";
 import { useSession, type SessionState } from "./lib/use-session";
@@ -208,6 +209,7 @@ function App({ session }: { session: SessionState }): JSX.Element {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const skillMessagePaneRef = useRef<HTMLDivElement>(null);
   const skillMessageEndRef = useRef<HTMLDivElement>(null);
+  const skillDrawerToggleRef = useRef<HTMLButtonElement>(null);
   const [skillChatAtBottom, setSkillChatAtBottom] = useState(true);
   const [skillChatBottomPulse, setSkillChatBottomPulse] = useState(false);
   const skillChatBottomPulseTimer = useRef<number | null>(null);
@@ -290,7 +292,9 @@ function App({ session }: { session: SessionState }): JSX.Element {
   const isAdmin = auth?.user.role === "ADMIN";
 
   function scrollSkillChatToBottom(behavior: ScrollBehavior = "smooth"): void {
-    skillMessageEndRef.current?.scrollIntoView({ block: "end", behavior });
+    const pane = skillMessagePaneRef.current;
+    if (view !== "chat" || !pane) return;
+    pane.scrollTo({ top: pane.scrollHeight, behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "instant" : behavior });
   }
 
   function updateSkillChatScrollState(): void {
@@ -399,18 +403,22 @@ function App({ session }: { session: SessionState }): JSX.Element {
   }, []);
 
   useEffect(() => {
-    if (!skillChatAtBottom) return;
-    window.requestAnimationFrame(() => scrollSkillChatToBottom(messages.length > 1 ? "smooth" : "auto"));
-  }, [messages.length, selectedSkillId, skillChatAtBottom]);
+    if (view !== "chat" || !skillChatAtBottom) return;
+    const frame = window.requestAnimationFrame(() => scrollSkillChatToBottom(messages.length > 1 ? "smooth" : "auto"));
+    return () => window.cancelAnimationFrame(frame);
+  }, [messages.length, selectedSkillId, skillChatAtBottom, view]);
 
   useEffect(() => {
-    if (!chatDrawerOpen) return undefined;
+    if (!chatDrawerOpen || view !== "chat") return undefined;
     const listener = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setChatDrawerOpen(false);
+      if (event.key === "Escape") {
+        setChatDrawerOpen(false);
+        skillDrawerToggleRef.current?.focus();
+      }
     };
     window.addEventListener("keydown", listener);
     return () => window.removeEventListener("keydown", listener);
-  }, [chatDrawerOpen]);
+  }, [chatDrawerOpen, view]);
 
   useEffect(() => {
     if (auth) {
@@ -1545,8 +1553,8 @@ function App({ session }: { session: SessionState }): JSX.Element {
     >
       <TitleBar title={{ agents: "消息", chat: "聊天", "skill-editor": "角色", import: "导入", market: "发现", wallet: "钱包", models: "模型", admin: "后台", settings: "设置" }[view]} serverStatus={serverStatus} busy={busy} />
       <GlobalBusyIndicator active={busy} />
-      <div className={["agents", "wallet", "models", "admin", "settings"].includes(view) ? "app-body agent-mode" : "app-body"}>
-        <aside className="icon-rail">
+      <div className="app-body agent-mode">
+        <nav className="icon-rail" aria-label="主导航">
           <button
             className="avatar profile-trigger"
             title="个人资料"
@@ -1554,137 +1562,153 @@ function App({ session }: { session: SessionState }): JSX.Element {
           >
             <img src={auth.user.avatarUrl || defaultAvatarUrl} alt="" onError={fallbackImage} /><span />
           </button>
-          <RailButton active={view === "agents"} title="消息" icon={<MessageCircle />} onClick={() => setView("agents")} />
-          <RailButton active={view === "import"} title="导入" icon={<Upload />} onClick={() => setView("import")} />
-          <RailButton active={view === "market"} title="发现" icon={<Store />} onClick={() => setView("market")} />
-          <RailButton active={view === "wallet"} title="钱包" icon={<WalletCards />} onClick={() => { setView("wallet"); void refreshWallet(); }} />
-          <RailButton active={view === "models"} title="模型" icon={<Cpu />} onClick={() => setView("models")} />
-          {isAdmin && <RailButton active={view === "admin"} title="后台" icon={<ShieldCheck />} onClick={() => setView("admin")} />}
+          <div className="rail-group" role="group" aria-label="交流">
+            <span className="rail-group-label" aria-hidden="true">交流</span>
+            <RailButton active={view === "agents"} title="消息" icon={<MessageCircle />} onClick={() => setView("agents")} />
+            <RailButton active={view === "market"} title="发现" icon={<Store />} onClick={() => setView("market")} />
+          </div>
+          <div className="rail-group" role="group" aria-label="创作">
+            <span className="rail-group-label" aria-hidden="true">创作</span>
+            <RailButton active={view === "skill-editor" || view === "chat"} title="角色" icon={<Bot />} onClick={() => setView("skill-editor")} />
+            <RailButton active={view === "import"} title="导入" icon={<Upload />} onClick={() => setView("import")} />
+          </div>
+          <div className="rail-group" role="group" aria-label="管理">
+            <span className="rail-group-label" aria-hidden="true">管理</span>
+            <RailButton active={view === "models"} title="模型" icon={<Cpu />} onClick={() => setView("models")} />
+            <RailButton active={view === "wallet"} title="钱包" icon={<WalletCards />} onClick={() => { setView("wallet"); void refreshWallet(); }} />
+            {isAdmin && <RailButton active={view === "admin"} title="后台" icon={<ShieldCheck />} onClick={() => setView("admin")} />}
+          </div>
           <div className="rail-spacer" />
           <RailButton active={view === "settings"} title="设置" icon={<Settings />} onClick={() => void openSettingsWindow()} />
-        </aside>
+        </nav>
 
-        {["chat", "skill-editor", "import", "market"].includes(view) && <aside className="skill-column">
-          <div className="search-box"><Search size={16} /><input value={skillSearch} onChange={(event) => setSkillSearch(event.target.value)} placeholder="搜索 Skill" /></div>
-          <button className="add-skill" onClick={() => void addSkill()}><Plus size={18} />添加 Skill</button>
-          <div className="skill-list-qq">
-            {filteredSkills.map((skill) => (
-              <MagneticButton key={skill.id} className={skill.id === selectedSkillId ? "skill-card active" : "skill-card"} onClick={() => openSkillEditor("profile", skill)}>
-                <img src={skill.avatarUrl || defaultAvatarUrl} alt="" onError={fallbackImage} />
-                <span><strong>{skill.name}</strong><small>{skill.description}</small></span>
-                <em>{formatSkillTime(skill.updatedAt)}</em>
-              </MagneticButton>
-            ))}
-            {filteredSkills.length === 0 && (
-              <div className="skill-list-empty">
-                <Bot size={24} />
-                <strong>{skills.length ? "没有匹配的 Skill" : "还没有 Skill"}</strong>
-                <span>{skills.length ? "换个关键词，或创建一个新的 Skill。" : "先创建一个 Skill，之后可以升级成 Agent。"}</span>
-                <button onClick={() => void addSkill()}><Plus size={15} />新建 Skill</button>
-              </div>
-            )}
-          </div>
-        </aside>}
-
-        <main className={`content view-${view}`} aria-busy={busy || skillSending}>
-          {view === "agents" && (
-            <AgentWorkspace user={auth.user} providers={agentProviders} skills={skills} onNotice={setNotice} />
-          )}
-          {view === "chat" && (
-            <section className="chat-view">
-              <header className="chat-title">
-                <div><h2>{selectedSkill ? draft.name : "选择 Skill"}</h2><p>{selectedSkill ? draft.description : "从左侧选择一个 Skill，或添加新的 Skill。"}</p></div>
-                <div className="chat-actions">
-                  <button title="编辑 Skill" disabled={!selectedSkill} onClick={() => openSkillEditor("edit", selectedSkill)}><Edit3 size={16} />编辑</button>
-                  <button title="分享 Skill" disabled={!selectedSkill} onClick={() => openSkillEditor("share", selectedSkill)}><Share2 size={16} />分享</button>
-                  <button className="icon-only-button" title="更多" disabled={!selectedSkill} onClick={() => setChatDrawerOpen((open) => !open)}><MoreHorizontal size={19} /></button>
+        <main className="content motion-stack app-pages" aria-busy={busy || skillSending}>
+          <MotionPanel active={view === "agents"} aria-label="消息">
+            <AgentWorkspace active={view === "agents"} user={auth.user} providers={agentProviders} skills={skills} onNotice={setNotice} />
+          </MotionPanel>
+          <MotionPanel active={view === "chat" || view === "skill-editor"} aria-label="角色工作区">
+            <div className="skill-workspace">
+              <aside className="skill-column" aria-label="我的角色">
+                <header className="skill-library-heading"><h2>我的角色</h2><span>{skills.length} 个角色</span></header>
+                <div className="search-box"><Search size={16} /><input value={skillSearch} onChange={(event) => setSkillSearch(event.target.value)} placeholder="搜索角色" /></div>
+                <button className="add-skill" onClick={() => void addSkill()}><Plus size={18} />新建角色</button>
+                <div className="skill-list-qq">
+                  {filteredSkills.map((skill) => (
+                    <MagneticButton key={skill.id} className={skill.id === selectedSkillId ? "skill-card active" : "skill-card"} onClick={() => openSkillEditor("profile", skill)}>
+                      <img src={skill.avatarUrl || defaultAvatarUrl} alt="" onError={fallbackImage} />
+                      <span><strong>{skill.name}</strong><small>{skill.description}</small></span>
+                      <em>{formatSkillTime(skill.updatedAt)}</em>
+                    </MagneticButton>
+                  ))}
+                  {filteredSkills.length === 0 && (
+                    <div className="skill-list-empty">
+                      <Bot size={24} />
+                      <strong>{skills.length ? "没有匹配的 Skill" : "还没有 Skill"}</strong>
+                      <span>{skills.length ? "换个关键词，或创建一个新的 Skill。" : "先创建一个 Skill，之后可以升级成 Agent。"}</span>
+                      <button onClick={() => void addSkill()}><Plus size={15} />新建 Skill</button>
+                    </div>
+                  )}
                 </div>
-              </header>
-              <div ref={skillMessagePaneRef} className={skillChatBottomPulse ? "message-pane bottom-pulse" : "message-pane"} onScroll={updateSkillChatScrollState}>
-                {!selectedSkill && <div className="empty-chat"><MessageCircle size={48} /><strong>开始新的聊天</strong><span>从左侧选择一个角色，聊聊今天的想法。</span></div>}
-                {selectedSkill && messages.length === 0 && <div className="empty-chat"><img src={selectedSkill.avatarUrl || defaultAvatarUrl} alt="" onError={fallbackImage} /><strong>还没有聊天</strong><span>向这个 Skill 发送第一句话。</span></div>}
-                {messages.map((message) => (
-                  <div key={message.id} className={`msg ${message.role}`}>
-                    <div className="msg-bubble"><p>{message.content}</p>{message.modelLabel && <small>{message.modelLabel}</small>}</div>
-                  </div>
-                ))}
-                <div ref={skillMessageEndRef} />
-                {selectedSkill && !skillChatAtBottom && <button className="chat-scroll-bottom" type="button" onClick={() => { scrollSkillChatToBottom(); setSkillChatAtBottom(true); }}><ArrowDown size={15} />到底部</button>}
-              </div>
-              <form className="message-input" onSubmit={(event) => void sendMessage(event)}>
-                <div className="composer-input-wrap">
-                  <textarea
-                    value={composer}
-                    maxLength={CHAT_COMPOSER_MAX_LENGTH}
-                    onChange={(event) => updateSkillComposer(event.target.value)}
-                    onKeyDown={handleSkillComposerKeyDown}
-                    placeholder="输入消息..."
-                    aria-label="输入 Skill 消息"
-                    disabled={!selectedSkill}
+              </aside>
+              <div className="motion-stack">
+                <MotionPanel active={view === "chat"} aria-label="角色聊天">
+                  <section className="chat-view">
+                    <header className="chat-title">
+                      <div><h2>{selectedSkill ? draft.name : "选择 Skill"}</h2><p>{selectedSkill ? draft.description : "从左侧选择一个 Skill，或添加新的 Skill。"}</p></div>
+                      <div className="chat-actions">
+                        <button title="编辑 Skill" disabled={!selectedSkill} onClick={() => openSkillEditor("edit", selectedSkill)}><Edit3 size={16} />编辑</button>
+                        <button title="分享 Skill" disabled={!selectedSkill} onClick={() => openSkillEditor("share", selectedSkill)}><Share2 size={16} />分享</button>
+                        <button ref={skillDrawerToggleRef} className="icon-only-button" title="更多" aria-expanded={chatDrawerOpen} aria-controls="skill-chat-details" disabled={!selectedSkill} onClick={() => setChatDrawerOpen((open) => !open)}><MoreHorizontal size={19} /></button>
+                      </div>
+                    </header>
+                    <div ref={skillMessagePaneRef} className={skillChatBottomPulse ? "message-pane bottom-pulse" : "message-pane"} onScroll={updateSkillChatScrollState}>
+                      {!selectedSkill && <div className="empty-chat"><MessageCircle size={48} /><strong>开始新的聊天</strong><span>从左侧选择一个角色，聊聊今天的想法。</span></div>}
+                      {selectedSkill && messages.length === 0 && <div className="empty-chat"><img src={selectedSkill.avatarUrl || defaultAvatarUrl} alt="" onError={fallbackImage} /><strong>还没有聊天</strong><span>向这个 Skill 发送第一句话。</span></div>}
+                      {messages.map((message) => (
+                        <div key={message.id} className={`msg ${message.role}`}>
+                          <div className="msg-bubble"><p>{message.content}</p>{message.modelLabel && <small>{message.modelLabel}</small>}</div>
+                        </div>
+                      ))}
+                      <div ref={skillMessageEndRef} />
+                      {selectedSkill && !skillChatAtBottom && <button className="chat-scroll-bottom" type="button" onClick={() => { scrollSkillChatToBottom(); setSkillChatAtBottom(true); }}><ArrowDown size={15} />到底部</button>}
+                    </div>
+                    <form className="message-input" onSubmit={(event) => void sendMessage(event)}>
+                      <div className="composer-input-wrap">
+                        <textarea
+                          value={composer}
+                          maxLength={CHAT_COMPOSER_MAX_LENGTH}
+                          onChange={(event) => updateSkillComposer(event.target.value)}
+                          onKeyDown={handleSkillComposerKeyDown}
+                          placeholder="输入消息..."
+                          aria-label="输入 Skill 消息"
+                          disabled={!selectedSkill}
+                        />
+                        {composer && <button className="composer-clear" type="button" title="清空输入" aria-label="清空输入" disabled={busy || skillSending} onClick={() => updateSkillComposer("")}><X size={14} /></button>}
+                        <div className="composer-meta" aria-live="polite">
+                          <span>{skillSending ? "正在发送..." : "Enter 发送 · Shift+Enter 换行"}</span>
+                          <span className={skillComposerNearLimit ? "warn" : ""}>{skillComposerLength}/{CHAT_COMPOSER_MAX_LENGTH}</span>
+                        </div>
+                      </div>
+                      <button title="发送" aria-label="发送消息" disabled={!skillCanSend}>{skillSending ? <RefreshCw className="spin" size={18} /> : <Send size={18} />}</button>
+                    </form>
+                    {selectedSkill && (
+                      <aside id="skill-chat-details" ref={(element) => { if (element) element.inert = !chatDrawerOpen; }} aria-hidden={!chatDrawerOpen || undefined} className={chatDrawerOpen ? "chat-more-drawer open" : "chat-more-drawer"}>
+                        <div className="drawer-group">
+                          <label className="drawer-switch"><span><Pin size={16} />置顶</span><input type="checkbox" checked={pinnedSkillIds.includes(selectedSkill.id)} onChange={togglePinnedSkill} /></label>
+                          <label className="drawer-switch" title="主动消息调度器尚未接入"><span><BellOff size={16} />主动消息免打扰（未启用）</span><input type="checkbox" checked={false} disabled /></label>
+                        </div>
+                        <div className="drawer-group">
+                          <button onClick={() => void clearCurrentMessages()}><Trash2 size={16} />删除聊天记录</button>
+                          <button onClick={() => void deleteCurrentSkill()}><Trash2 size={16} />删除 Skill</button>
+                        </div>
+                        <button className="drawer-report" onClick={() => void reportCurrentSkill()}><Flag size={15} />举报该 Skill</button>
+                      </aside>
+                    )}
+                  </section>
+                </MotionPanel>
+
+                <MotionPanel active={view === "skill-editor"} aria-label="角色编辑">
+                  <SkillEditorPage
+                    tab={skillEditorTab}
+                    setTab={setSkillEditorTab}
+                    skill={selectedSkill}
+                    draft={draft}
+                    setDraft={setDraft}
+                    errors={skillEditorErrors}
+                    clearError={(key) => setSkillEditorErrors((current) => clearFieldError(current, key))}
+                    busy={busy}
+                    onBack={() => setView("agents")}
+                    onSave={() => void saveSkill()}
+                    onPublish={() => void publishSkill()}
+                    onCopyShare={() => void copySkillShareCode()}
+                    modelMode={modelMode}
+                    setModelMode={setModelMode}
+                    cloudProviders={cloudProviders}
+                    cloudProviderId={cloudProviderId}
+                    setCloudProviderId={setCloudProviderId}
+                    selectedProvider={selectedProvider}
+                    cloudModel={cloudModel}
+                    setCloudModel={setCloudModel}
+                    userModels={userModels}
+                    userModelId={userModelId}
+                    setUserModelId={setUserModelId}
+                    autoSettings={autoSettings}
+                    saveAutoSettings={(next) => void saveAutoSettings(next)}
+                    tokenTransactions={tokenTransactions}
+                    newSkillKind={newSkillKind}
+                    setNewSkillKind={setNewSkillKind}
+                    newSkillSourceFile={newSkillSourceFile}
+                    chooseNewSkillImportFile={() => void chooseNewSkillImportFile()}
+                    chooseNewSkillAvatar={() => void chooseNewSkillAvatar()}
+                    newSkillExpertField={newSkillExpertField}
+                    setNewSkillExpertField={setNewSkillExpertField}
                   />
-                  {composer && <button className="composer-clear" type="button" title="清空输入" aria-label="清空输入" disabled={busy || skillSending} onClick={() => updateSkillComposer("")}><X size={14} /></button>}
-                  <div className="composer-meta" aria-live="polite">
-                    <span>{skillSending ? "正在发送..." : "Enter 发送 · Shift+Enter 换行"}</span>
-                    <span className={skillComposerNearLimit ? "warn" : ""}>{skillComposerLength}/{CHAT_COMPOSER_MAX_LENGTH}</span>
-                  </div>
-                </div>
-                <button title="发送" aria-label="发送消息" disabled={!skillCanSend}>{skillSending ? <RefreshCw className="spin" size={18} /> : <Send size={18} />}</button>
-              </form>
-              {selectedSkill && (
-                <aside className={chatDrawerOpen ? "chat-more-drawer open" : "chat-more-drawer"}>
-                  <div className="drawer-group">
-                    <label className="drawer-switch"><span><Pin size={16} />置顶</span><input type="checkbox" checked={pinnedSkillIds.includes(selectedSkill.id)} onChange={togglePinnedSkill} /></label>
-                    <label className="drawer-switch" title="主动消息调度器尚未接入"><span><BellOff size={16} />主动消息免打扰（未启用）</span><input type="checkbox" checked={false} disabled /></label>
-                  </div>
-                  <div className="drawer-group">
-                    <button onClick={() => void clearCurrentMessages()}><Trash2 size={16} />删除聊天记录</button>
-                    <button onClick={() => void deleteCurrentSkill()}><Trash2 size={16} />删除 Skill</button>
-                  </div>
-                  <button className="drawer-report" onClick={() => void reportCurrentSkill()}><Flag size={15} />举报该 Skill</button>
-                </aside>
-              )}
-            </section>
-          )}
+                </MotionPanel>
+              </div>
+            </div>
+          </MotionPanel>
 
-          {view === "skill-editor" && (
-            <SkillEditorPage
-              tab={skillEditorTab}
-              setTab={setSkillEditorTab}
-              skill={selectedSkill}
-              draft={draft}
-              setDraft={setDraft}
-              errors={skillEditorErrors}
-              clearError={(key) => setSkillEditorErrors((current) => clearFieldError(current, key))}
-              busy={busy}
-              onBack={() => setView("agents")}
-              onSave={() => void saveSkill()}
-              onPublish={() => void publishSkill()}
-              onCopyShare={() => void copySkillShareCode()}
-              modelMode={modelMode}
-              setModelMode={setModelMode}
-              cloudProviders={cloudProviders}
-              cloudProviderId={cloudProviderId}
-              setCloudProviderId={setCloudProviderId}
-              selectedProvider={selectedProvider}
-              cloudModel={cloudModel}
-              setCloudModel={setCloudModel}
-              userModels={userModels}
-              userModelId={userModelId}
-              setUserModelId={setUserModelId}
-              autoSettings={autoSettings}
-              saveAutoSettings={(next) => void saveAutoSettings(next)}
-              tokenTransactions={tokenTransactions}
-              newSkillKind={newSkillKind}
-              setNewSkillKind={setNewSkillKind}
-              newSkillSourceFile={newSkillSourceFile}
-              chooseNewSkillImportFile={() => void chooseNewSkillImportFile()}
-              chooseNewSkillAvatar={() => void chooseNewSkillAvatar()}
-              newSkillExpertField={newSkillExpertField}
-              setNewSkillExpertField={setNewSkillExpertField}
-            />
-          )}
-
-          {view === "import" && (
+          <MotionPanel active={view === "import"} aria-label="导入聊天记录">
             <ToolPage title="导入聊天记录" subtitle="支持 TXT、CSV、JSON、HTML、MD。微信/QQ 请先用外部工具导出。">
               <div className="split-tools">
                 <div className="panel">
@@ -1708,9 +1732,9 @@ function App({ session }: { session: SessionState }): JSX.Element {
                 </div>
               </div>
             </ToolPage>
-          )}
+          </MotionPanel>
 
-          {view === "market" && (
+          <MotionPanel active={view === "market"} aria-label="发现">
             <ToolPage title="聊天广场" subtitle="匿名评论、点赞点踩、收藏和导入别人的 Skill。">
               <div className="market-tools">
                 <div className="market-list">
@@ -1752,9 +1776,9 @@ function App({ session }: { session: SessionState }): JSX.Element {
                 </div>
               </div>
             </ToolPage>
-          )}
+          </MotionPanel>
 
-          {view === "models" && (
+          <MotionPanel active={view === "models"} aria-label="模型">
             <ToolPage
               title="我的模型 API"
               subtitle="模型参数上传服务器并加密保存，仅当前账号及其私有 Agent 可以使用。"
@@ -1793,9 +1817,9 @@ function App({ session }: { session: SessionState }): JSX.Element {
                 </div>
               </div>
             </ToolPage>
-          )}
+          </MotionPanel>
 
-          {view === "wallet" && (
+          <MotionPanel active={view === "wallet"} aria-label="钱包">
             <WalletPage
               summary={walletSummary}
               currentUser={auth?.user ?? null}
@@ -1809,9 +1833,9 @@ function App({ session }: { session: SessionState }): JSX.Element {
               onSubmitRecharge={(id) => void submitRechargeOrder(id)}
               onCancelRecharge={(id) => void cancelRechargeOrder(id)}
             />
-          )}
+          </MotionPanel>
 
-          {view === "admin" && isAdmin && (
+          {isAdmin && <MotionPanel active={view === "admin"} aria-label="管理员后台">
             <ToolPage title="管理员后台" subtitle="管理平台云模型供应商、Agent 举报审核和公开内容风险。">
               <div className="admin-console-grid">
                 <AdminProviderForm form={providerForm} setForm={setProviderForm} onKindChange={applyAdminProviderPreset} onSave={() => void saveAdminProvider()} errors={adminProviderErrors} clearError={(key) => setAdminProviderErrors((current) => clearFieldError(current, key))} />
@@ -1890,9 +1914,9 @@ function App({ session }: { session: SessionState }): JSX.Element {
                 </div>
               </div>
             </ToolPage>
-          )}
+          </MotionPanel>}
 
-          {view === "settings" && activeSettings && (
+          {activeSettings && <MotionPanel active={view === "settings"} aria-label="设置">
             <SettingsPanel
               activeSettings={activeSettings}
               settingsSection={settingsSection}
@@ -1904,7 +1928,7 @@ function App({ session }: { session: SessionState }): JSX.Element {
               onLogout={() => void logout()}
               onEditProfile={() => void openProfileEditWindow()}
             />
-          )}
+          </MotionPanel>}
 
         </main>
       </div>
@@ -2204,6 +2228,7 @@ function SkillEditorPage(props: {
   newSkillExpertField: string;
   setNewSkillExpertField: (value: string) => void;
 }): JSX.Element {
+  const tabId = useId();
   const update = <K extends keyof SkillDraft>(key: K, value: SkillDraft[K]) => {
     props.clearError(String(key));
     props.setDraft({ ...props.draft, [key]: value });
@@ -2298,9 +2323,16 @@ function SkillEditorPage(props: {
         <img src={props.draft.avatarUrl || defaultAvatarUrl} alt="" onError={fallbackImage} />
         <h2>{props.draft.name || "新的 Skill"}</h2>
         <p>{props.draft.description}</p>
-        <nav>
+        <nav role="tablist" aria-label="角色设置" aria-orientation="vertical">
           {tabs.map((tab) => (
-            <button key={tab.id} className={props.tab === tab.id ? "active" : ""} onClick={() => props.setTab(tab.id)}>
+            <button key={tab.id} id={`${tabId}-${tab.id}-tab`} role="tab" aria-selected={props.tab === tab.id} aria-controls={`${tabId}-${tab.id}-panel`} tabIndex={props.tab === tab.id ? 0 : -1} className={props.tab === tab.id ? "active" : ""} onClick={() => props.setTab(tab.id)} onKeyDown={(event) => {
+              const index = tabs.findIndex((item) => item.id === tab.id);
+              const next = event.key === "ArrowDown" ? (index + 1) % tabs.length : event.key === "ArrowUp" ? (index + tabs.length - 1) % tabs.length : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : -1;
+              if (next < 0) return;
+              event.preventDefault();
+              props.setTab(tabs[next].id);
+              document.getElementById(`${tabId}-${tabs[next].id}-tab`)?.focus();
+            }}>
               {tab.icon}{tab.label}
             </button>
           ))}
@@ -2317,7 +2349,8 @@ function SkillEditorPage(props: {
           <button className="primary-button" disabled={props.busy} onClick={props.onSave}><Check size={16} />{props.skill ? "保存" : "保存并同步"}</button>
         </header>
 
-        {props.tab === "profile" && (
+        <div className="motion-stack skill-editor-panels" key={props.skill.id}>
+        <MotionPanel active={props.tab === "profile"} id={`${tabId}-profile-panel`} role="tabpanel" aria-labelledby={`${tabId}-profile-tab`}>
           <div className="editor-section">
             <div className="skill-avatar-upload">
               <img src={props.draft.avatarUrl || defaultAvatarUrl} alt="" onError={fallbackImage} />
@@ -2331,9 +2364,9 @@ function SkillEditorPage(props: {
             <FormField label="简介" error={props.errors.description}><input aria-invalid={Boolean(props.errors.description)} value={props.draft.description} onChange={(event) => update("description", event.target.value)} /></FormField>
             <FormField label="标签"><input value={props.draft.tags.join(", ")} onChange={(event) => update("tags", splitTags(event.target.value))} /></FormField>
           </div>
-        )}
+        </MotionPanel>
 
-        {props.tab === "edit" && (
+        <MotionPanel active={props.tab === "edit"} id={`${tabId}-edit-panel`} role="tabpanel" aria-labelledby={`${tabId}-edit-tab`}>
           <div className="editor-section two-column">
             <FormField label="人格" error={props.errors.persona}><textarea aria-invalid={Boolean(props.errors.persona)} value={props.draft.persona} onChange={(event) => update("persona", event.target.value)} /></FormField>
             <FormField label="语气" error={props.errors.tone}><textarea aria-invalid={Boolean(props.errors.tone)} value={props.draft.tone} onChange={(event) => update("tone", event.target.value)} /></FormField>
@@ -2342,18 +2375,18 @@ function SkillEditorPage(props: {
             <FormField label="示例用户消息"><input value={firstExample.user} onChange={(event) => update("examples", [{ ...firstExample, user: event.target.value }])} /></FormField>
             <FormField label="示例 Skill 回复"><input value={firstExample.assistant} onChange={(event) => update("examples", [{ ...firstExample, assistant: event.target.value }])} /></FormField>
           </div>
-        )}
+        </MotionPanel>
 
-        {props.tab === "share" && (
+        <MotionPanel active={props.tab === "share"} id={`${tabId}-share-panel`} role="tabpanel" aria-labelledby={`${tabId}-share-tab`}>
           <div className="editor-section share-section">
             <button disabled={!props.skill} onClick={props.onPublish}><Store size={16} />分享到聊天广场</button>
             <button disabled={!props.skill} onClick={props.onCopyShare}><Clipboard size={16} />复制 Skill 云端标识</button>
             <div className="share-code">CHAQ-SKILL:{props.skill?.id ?? "保存后生成"}</div>
             <small className="form-field-hint">该标识不会自动打开应用；跨设备分发请先发布到聊天广场。</small>
           </div>
-        )}
+        </MotionPanel>
 
-        {props.tab === "more" && (
+        <MotionPanel active={props.tab === "more"} id={`${tabId}-more-panel`} role="tabpanel" aria-labelledby={`${tabId}-more-tab`}>
           <div className="editor-section two-column">
             <label>模型来源
               <select value={props.modelMode} onChange={(event) => props.setModelMode(event.target.value as ModelMode)}>
@@ -2416,7 +2449,8 @@ function SkillEditorPage(props: {
               <strong>{cloudSpent} token</strong>
             </div>
           </div>
-        )}
+        </MotionPanel>
+        </div>
       </div>
     </section>
   );
