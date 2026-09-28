@@ -1,0 +1,43 @@
+.motion-stack {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.motion-panel {
+  grid-area: 1 / 1;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.motion-panel[data-motion-active="true"] { z-index: 1; }
+.motion-panel[data-motion-active="false"] { pointer-events: none; z-index: 0; }
+.motion-panel[hidden] { display: none !important; }
+.motion-panel[data-motion="entering"] {
+  animation: motion-panel-enter 240ms cubic-bezier(.22, 1, .36, 1) both;
+}
+.motion-panel[data-motion="exiting"] {
+  animation: motion-panel-exit 180ms cubic-bezier(.4, 0, 1, 1) both;
+}
+
+@keyframes motion-panel-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes motion-panel-exit {
+  from { opacity: 1; transform: translateY(0); }
+  to { opacity: 0; transform: translateY(-5px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .motion-panel[data-motion] { animation: none; transform: none; }
+}
