@@ -53,9 +53,20 @@ function fixture() {
   const notices: string[] = [];
   const imports: Array<{ agentId: string; payload: unknown }> = [];
   const pending = deferred<Awaited<ReturnType<typeof api.addAgentKnowledge>>>();
+  const pendingSend = deferred<ConversationMessage>();
+  const sends: string[] = [];
+  const readReceipts: string[] = [];
+  const directoryReads: number[] = [];
+  const pollTimers = new Map<number, () => void>();
+  const timerWindow: Window = window;
+  const originalSetInterval = timerWindow.setInterval;
+  const originalClearInterval = timerWindow.clearInterval;
   const originalFetch = window.fetch;
   const mocks = {
-    agents: async () => [...agents.values()].map((agent) => structuredClone(agent)),
+    agents: async () => {
+      directoryReads.push(Date.now());
+      return [...agents.values()].map((agent) => structuredClone(agent));
+    },
     agentContacts: async () => structuredClone(directoryContacts),
     conversations: async () => structuredClone(directoryConversations),
     agent: async (id: string) => {
@@ -70,7 +81,14 @@ function fixture() {
       participants: [], unreadCount: 0, createdAt: timestamp
     }),
     conversationMessages: async () => structuredClone(conversationMessages),
-    markConversationRead: async () => ({ ok: true as const }),
+    markConversationRead: async (id: string) => {
+      readReceipts.push(id);
+      return { ok: true as const };
+    },
+    sendConversationMessage: async (conversationId: string) => {
+      sends.push(conversationId);
+      return pendingSend.promise;
+    },
     addAgentKnowledge: async (agentId: string, payload: unknown) => {
       imports.push({ agentId, payload });
       return pending.promise;
@@ -79,19 +97,38 @@ function fixture() {
   const originals = Object.fromEntries(Object.keys(mocks).map((key) => [key, api[key as keyof typeof mocks]]));
   Object.assign(api, mocks);
   window.fetch = async () => { throw new Error("Unexpected network request in workspace fixture"); };
+  timerWindow.setInterval = (handler: TimerHandler, delay?: number, ...args: unknown[]) => {
+    const id = originalSetInterval.call(window, handler, delay, ...args);
+    if (delay === 10_000 && typeof handler === "function") pollTimers.set(id, () => handler(...args));
+    return id;
+  };
+  timerWindow.clearInterval = (id?: number) => {
+    if (id !== undefined) pollTimers.delete(id);
+    originalClearInterval.call(window, id);
+  };
   const container = document.createElement("div");
+  container.style.width = "1024px";
+  container.style.height = "700px";
   document.getElementById("root")!.append(container);
   const root = createRoot(container);
   let mounted = false;
 
+  function queryAll<T extends Element = Element>(selector: string): T[] {
+    return Array.from(container.querySelectorAll<T>(selector)).filter((node) => !node.closest('[inert], [aria-hidden="true"]'));
+  }
+
+  function query<T extends Element = Element>(selector: string): T | null {
+    return queryAll<T>(selector)[0] ?? null;
+  }
+
   function field(placeholder: string): HTMLInputElement | HTMLTextAreaElement {
-    const node = container.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[placeholder="${placeholder}"]`);
+    const node = query<HTMLInputElement | HTMLTextAreaElement>(`[placeholder="${placeholder}"]`);
     check(node, `missing field ${placeholder}`);
     return node;
   }
 
   async function click(selector: string, text: string): Promise<void> {
-    const button = Array.from(container.querySelectorAll<HTMLButtonElement>(selector)).find((item) => item.textContent === text);
+    const button = queryAll<HTMLButtonElement>(selector).find((item) => item.textContent === text);
     check(button, `missing button ${text}`);
     await act(async () => { button.click(); });
   }
@@ -107,8 +144,21 @@ function fixture() {
   }
 
   return {
-    container, reads, notices, imports, field, fill, click, directoryConversations, directoryContacts, conversationMessages,
-    selected: () => container.querySelector(".agent-directory-row.active strong")?.textContent,
+    container, reads, notices, imports, field, fill, click, query, queryAll, sends, readReceipts, directoryReads, directoryConversations, directoryContacts, conversationMessages,
+    selected: () => query(".agent-directory-row.active strong")?.textContent,
+    pollTimerCount: () => pollTimers.size,
+    tickPoll: async () => {
+      await act(async () => { for (const callback of pollTimers.values()) callback(); });
+    },
+    setActive: async (active: boolean) => {
+      await act(async () => { root.render(<AgentWorkspace active={active} user={user} providers={[]} skills={[]} onNotice={(message) => notices.push(message)} />); });
+    },
+    failSend: async () => {
+      await act(async () => { pendingSend.reject(new Error("Message delivery interrupted")); });
+    },
+    finishSend: async () => {
+      await act(async () => { pendingSend.resolve({ id: "sent-message", conversationId: "conversation-agent-a", authorKind: "user", authorId: user.id, kind: "text", content: "Pending message", status: "delivered", createdAt: timestamp }); });
+    },
     mount: async () => {
       await act(async () => { root.render(<AgentWorkspace user={user} providers={[]} skills={[]} onNotice={(message) => notices.push(message)} />); });
       mounted = true;
@@ -122,7 +172,7 @@ function fixture() {
       check(imports.length === 1 && imports[0].agentId === "agent-a", "import must be pending for Agent A");
     },
     selectB: async () => {
-      const button = Array.from(container.querySelectorAll<HTMLButtonElement>(".agent-directory-row"))
+      const button = queryAll<HTMLButtonElement>(".agent-directory-row")
         .find((item) => item.querySelector("strong")?.textContent === "Agent B");
       check(button, "Agent B must appear in the directory");
       await act(async () => { button.click(); });
@@ -150,12 +200,127 @@ function fixture() {
       container.remove();
       Object.assign(api, originals);
       window.fetch = originalFetch;
+      timerWindow.setInterval = originalSetInterval;
+      timerWindow.clearInterval = originalClearInterval;
     }
   };
 }
 
 type Fixture = ReturnType<typeof fixture>;
 const cases: Array<{ name: string; run(test: Fixture): Promise<void> }> = [
+  {
+    name: "switching companion tabs preserves draft fields, validation and scroll position",
+    async run(test) {
+      await test.fill("长期记忆", "Unsaved memory across tabs");
+      await test.click(".knowledge button", "索引");
+      const field = test.field("长期记忆");
+      const scroll = field.closest<HTMLDivElement>(".agent-panel-stack")!;
+      scroll.style.height = "160px";
+      scroll.style.flex = "0 0 160px";
+      check(scroll.scrollHeight - scroll.clientHeight > 85, `memory fixture must have overflowing form content (client=${scroll.clientHeight}, content=${scroll.scrollHeight}, display=${getComputedStyle(scroll).display}, overflow=${getComputedStyle(scroll).overflowY}, hidden=${Boolean(scroll.closest('[hidden]'))})`);
+      scroll.scrollTop = 85;
+      const savedScroll = scroll.scrollTop;
+      check(Math.abs(savedScroll - 85) < 1, "memory fixture must have a scrollable editor at the current display scale");
+      const errors = test.queryAll(".field-error").map((item) => item.textContent).join("|");
+      check(errors.length > 0, "invalid knowledge must display its validation errors");
+      await test.click(".agent-tabs [role=tab]", "目标");
+      await waitFor(() => Boolean(scroll.closest("[hidden]")), "inactive memory pane must finish exiting");
+      check(field.closest("[inert]"), "inactive editor must not receive keyboard input");
+      await test.click(".agent-tabs [role=tab]", "会话");
+      await test.fill("发消息给 Agent A", "Unsent chat draft");
+      await test.click(".agent-tabs [role=tab]", "记忆");
+      check(test.field("长期记忆") === field && field.value === "Unsaved memory across tabs", "return must reuse the unsaved memory editor");
+      check(Math.abs(scroll.scrollTop - savedScroll) < 1, "return must restore the memory scroll position");
+      check(test.queryAll(".field-error").map((item) => item.textContent).join("|") === errors, "tab switching must preserve validation feedback");
+      await test.click(".agent-tabs [role=tab]", "会话");
+      check(test.field("发消息给 Agent A").value === "Unsent chat draft", "chat draft must survive management tabs");
+    }
+  },
+  {
+    name: "tab keyboard navigation follows focus and wraps without exposing inactive panes",
+    async run(test) {
+      const stageTabs = test.query<HTMLElement>(".agent-tabs")!;
+      async function press(group: HTMLElement, key: string, expected: string): Promise<void> {
+        const current = group.querySelector<HTMLButtonElement>('[aria-selected="true"]')!;
+        await act(async () => {
+          current.focus();
+          current.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+        });
+        const selected = group.querySelector<HTMLButtonElement>('[aria-selected="true"]')!;
+        check(selected.textContent === expected, `${key} must select ${expected}`);
+        check(document.activeElement === selected, `${key} must keep focus on the selected tab`);
+        check(group.querySelectorAll('[tabindex="0"]').length === 1, "only the selected tab belongs in the tab order");
+        const panel = document.getElementById(selected.getAttribute("aria-controls")!);
+        check(panel?.getAttribute("aria-labelledby") === selected.id && !panel.inert, "selected tab must identify its accessible panel");
+      }
+      await press(stageTabs, "ArrowRight", "关系");
+      await press(stageTabs, "End", "活动");
+      await press(stageTabs, "Home", "会话");
+      await press(stageTabs, "ArrowLeft", "活动");
+      const directoryTabs = test.query<HTMLElement>(".qq-directory-tabs")!;
+      await press(directoryTabs, "ArrowLeft", "发现");
+      await press(directoryTabs, "ArrowRight", "消息");
+      check(test.queryAll('.agent-stage-body > [role="tabpanel"]').length === 1, "only one companion pane must remain interactive");
+    }
+  },
+  {
+    name: "conversation drafts stay with their own companion",
+    async run(test) {
+      await test.click(".agent-tabs [role=tab]", "会话");
+      await test.fill("发消息给 Agent A", "Agent A draft");
+      await test.selectB();
+      check(test.field("发消息给 Agent B").value === "", "Agent A draft must not appear in Agent B's composer");
+      await test.fill("发消息给 Agent B", "Agent B draft");
+      const agentA = test.queryAll<HTMLButtonElement>(".agent-directory-row").find((item) => item.querySelector("strong")?.textContent === "Agent A")!;
+      await act(async () => { agentA.click(); });
+      await waitFor(() => test.query(".agent-stage h2")?.textContent === "Agent A", "Agent A must become current again");
+      check(test.field("发消息给 Agent A").value === "Agent A draft", "returning to Agent A must recover its draft");
+      await test.selectB();
+      check(test.field("发消息给 Agent B").value === "Agent B draft", "returning to Agent B must recover its own draft");
+    }
+  },
+  {
+    name: "hidden workspaces suspend polling and read receipts, then refresh without replacing drafts",
+    async run(test) {
+      await test.fill("长期记忆", "Keep this editor when returning");
+      const field = test.field("长期记忆");
+      check(test.pollTimerCount() === 1, "visible workspace must own one polling timer");
+      await test.tickPoll();
+      const before = test.directoryReads.length;
+      const receiptsBefore = test.readReceipts.length;
+      await test.setActive(false);
+      check(test.pollTimerCount() === 0, "hidden workspace must stop its polling timer");
+      const incoming: ConversationMessage = { id: "background-message", conversationId: "conversation-agent-a", authorKind: "agent", authorId: "agent-a", kind: "text", content: "Arrived in background", status: "delivered", createdAt: timestamp };
+      await act(async () => { window.dispatchEvent(new CustomEvent("chaq:realtime", { detail: { type: "conversation.message", payload: incoming } })); });
+      await test.tickPoll();
+      check(test.directoryReads.length === before, "hidden realtime updates must not start refresh requests");
+      check(test.readReceipts.length === receiptsBefore, "hidden realtime messages must stay unread");
+      await test.setActive(true);
+      check(test.directoryReads.length === before + 1 && test.pollTimerCount() === 1, "returning must refresh immediately and resume one timer");
+      check(test.readReceipts.length === receiptsBefore, "returning to a management tab must leave chat messages unread");
+      check(test.field("长期记忆") === field && field.value === "Keep this editor when returning", "returning must keep the current editor and draft");
+      await test.click(".agent-tabs [role=tab]", "会话");
+      check(test.readReceipts.length === receiptsBefore + 1, "opening the chat must acknowledge its messages");
+      check(test.queryAll(".agent-message-row").some((row) => row.textContent?.includes("Arrived in background")), "background arrivals must be visible after returning");
+    }
+  },
+  ...[false, true].map((failed) => ({
+    name: `a pending send can ${failed ? "fail" : "complete"} while its workspace is hidden`,
+    async run(test: Fixture) {
+      await test.click(".agent-tabs [role=tab]", "会话");
+      await test.fill("发消息给 Agent A", "Pending message");
+      await test.click('[aria-label="发送消息"]', "发送");
+      check(test.sends.length === 1 && test.sends[0] === "conversation-agent-a", "send must target the current conversation once");
+      await test.setActive(false);
+      if (failed) await test.failSend();
+      else await test.finishSend();
+      await test.setActive(true);
+      check(test.field("发消息给 Agent A").value === (failed ? "Pending message" : ""), "failed delivery must recover the draft while successful delivery clears it");
+      check(!test.query(".agent-chat-thinking"), "send completion must clear the busy state even while hidden");
+      check(test.sends.length === 1, "returning must not submit the message again");
+      if (!failed) check(test.queryAll(".agent-message-row").some((row) => row.textContent?.includes("Pending message")), "successful message must remain visible after the resume refresh");
+    }
+  })),
   {
     name: "existing conversations replace duplicate partner rows while names and aliases remain searchable",
     async run(test) {
@@ -171,18 +336,18 @@ const cases: Array<{ name: string; run(test: Fixture): Promise<void> }> = [
         agent: { ...agentFixture("public-agent"), name: "Public partner", profileStatus: "", mood: "" }
       });
       await test.click('[aria-label="刷新列表"]', "");
-      check(test.container.querySelectorAll(".agent-inbox-row").length === 2, "existing conversations must be displayed");
-      const partners = Array.from(test.container.querySelectorAll(".agent-directory-list .agent-directory-row strong")).map((item) => item.textContent);
+      check(test.queryAll(".agent-inbox-row").length === 2, "existing conversations must be displayed");
+      const partners = Array.from(test.queryAll(".agent-directory-list .agent-directory-row strong")).map((item) => item.textContent);
       check(partners.length === 1 && partners[0] === "Agent B", "messages must only list partners without an existing conversation");
-      check(test.container.querySelectorAll(".agent-inbox-row.active, .agent-directory-row.active").length === 1, "selection must have a single directory entry");
+      check(test.queryAll(".agent-inbox-row.active, .agent-directory-row.active").length === 1, "selection must have a single directory entry");
       await test.fill("搜索 Agent", "Agent A");
-      check(test.container.querySelector(".agent-inbox-row strong")?.textContent === "Existing conversation", "current partner names must find renamed conversations");
+      check(test.query(".agent-inbox-row strong")?.textContent === "Existing conversation", "current partner names must find renamed conversations");
       await test.fill("搜索 Agent", "Morning buddy");
-      check(test.container.querySelector(".agent-inbox-row strong")?.textContent === "Public conversation", "contact aliases must find their conversations");
+      check(test.query(".agent-inbox-row strong")?.textContent === "Public conversation", "contact aliases must find their conversations");
       await test.click(".qq-directory-tabs button", "联系人");
-      check(test.container.querySelector(".agent-contact-list strong")?.textContent === "Morning buddy", "contact search must match aliases");
+      check(test.query(".agent-contact-list strong")?.textContent === "Morning buddy", "contact search must match aliases");
       await test.click('[aria-label="清空搜索"]', "");
-      check(test.container.querySelectorAll(".agent-directory-list .agent-directory-row").length === 2, "contacts must retain the full owned partner list");
+      check(test.queryAll(".agent-directory-list .agent-directory-row").length === 2, "contacts must retain the full owned partner list");
     }
   },
   {
@@ -196,8 +361,8 @@ const cases: Array<{ name: string; run(test: Fixture): Promise<void> }> = [
         }
         await test.click("[role=tab]", "会话");
         await test.click('[title="刷新"]', "");
-        await waitFor(() => test.container.querySelectorAll(".agent-message-row").length === 24, "fixture messages must load");
-        const list = test.container.querySelector<HTMLDivElement>(".agent-message-list")!;
+        await waitFor(() => test.queryAll(".agent-message-row").length === 24, "fixture messages must load");
+        const list = test.query<HTMLDivElement>(".agent-message-list")!;
         list.style.height = "180px";
         list.style.overflow = "auto";
         const scroll = list.scrollTo.bind(list);
@@ -207,10 +372,10 @@ const cases: Array<{ name: string; run(test: Fixture): Promise<void> }> = [
           list.scrollTop = 0;
           list.dispatchEvent(new Event("scroll"));
         });
-        await waitFor(() => Boolean(test.container.querySelector(".agent-scroll-bottom")), "scrolling up must reveal the shortcut");
+        await waitFor(() => Boolean(test.query(".agent-scroll-bottom")), "scrolling up must reveal the shortcut");
         check(!list.querySelector(".agent-scroll-bottom"), "shortcut must not increase the message scroll height");
         await test.click(".agent-scroll-bottom", "到底部");
-        await waitFor(() => !test.container.querySelector(".agent-scroll-bottom"), "shortcut must disappear after reaching the actual bottom");
+        await waitFor(() => !test.query(".agent-scroll-bottom"), "shortcut must disappear after reaching the actual bottom");
         check(list.scrollHeight - list.clientHeight - list.scrollTop < 2, "jump must reach the actual bottom of the message container");
         check(behaviors.length > 0 && behaviors.every((behavior) => behavior === "instant"), "reduced motion must avoid smooth programmatic scrolling");
       } finally {
@@ -222,11 +387,11 @@ const cases: Array<{ name: string; run(test: Fixture): Promise<void> }> = [
     name: "message and contact navigation retain the active conversation",
     async run(test) {
       await test.click(".qq-directory-tabs button", "联系人");
-      check(test.container.querySelector(".qq-directory-tabs button.active")?.textContent === "联系人", "contacts navigation must become active");
+      check(test.query(".qq-directory-tabs button.active")?.textContent === "联系人", "contacts navigation must become active");
       check(test.selected() === "Agent A", "contact navigation must preserve the selected partner");
       await test.click(".qq-directory-tabs button", "发现");
-      check(test.container.querySelector(".qq-discovery-card"), "discovery must show its entry point");
-      check(test.container.querySelector(".agent-stage h2")?.textContent === "Agent A", "discovery must not discard the current conversation");
+      check(test.query(".qq-discovery-card"), "discovery must show its entry point");
+      check(test.query(".agent-stage h2")?.textContent === "Agent A", "discovery must not discard the current conversation");
       await test.click(".qq-directory-tabs button", "消息");
       check(test.selected() === "Agent A", "returning to messages must restore the current selection");
     }
@@ -235,9 +400,9 @@ const cases: Array<{ name: string; run(test: Fixture): Promise<void> }> = [
     name: "directory search can be cleared without replacing the active partner",
     async run(test) {
       await test.fill("搜索 Agent", "Agent B");
-      const visible = Array.from(test.container.querySelectorAll(".agent-directory-row strong")).map((item) => item.textContent);
+      const visible = Array.from(test.queryAll(".agent-directory-row strong")).map((item) => item.textContent);
       check(visible.length === 1 && visible[0] === "Agent B", "search must filter the directory");
-      check(test.container.querySelector(".agent-stage h2")?.textContent === "Agent A", "search must not change the active conversation");
+      check(test.query(".agent-stage h2")?.textContent === "Agent A", "search must not change the active conversation");
       await test.click('[aria-label="清空搜索"]', "");
       check(test.field("搜索 Agent").value === "", "clear must reset the search text");
       check(test.selected() === "Agent A", "clear must restore the selected partner in the directory");
@@ -248,17 +413,19 @@ const cases: Array<{ name: string; run(test: Fixture): Promise<void> }> = [
     async run(test) {
       await test.click("[role=tab]", "会话");
       await test.fill("发消息给 Agent A", "Hello");
-      check(!test.container.querySelector(".qq-chat-details"), "details should start collapsed");
+      check(!test.query(".qq-chat-details"), "details should start collapsed");
       await test.click('[aria-label="查看聊天详情"]', "");
-      check(test.container.querySelector(".qq-chat-details h3")?.textContent === "Agent A", "details must describe the active partner");
+      check(test.query(".qq-chat-details h3")?.textContent === "Agent A", "details must describe the active partner");
+      test.query<HTMLButtonElement>('[aria-label="关闭详情"]')!.focus();
       await test.click('[aria-label="关闭详情"]', "");
-      check(!test.container.querySelector(".qq-chat-details"), "close must collapse the details pane");
+      check(!test.query(".qq-chat-details"), "close must collapse the details pane");
+      check(document.activeElement === test.query('[aria-label="查看聊天详情"]'), "closing a focused drawer must return focus to its toggle");
       check(test.field("发消息给 Agent A").value === "Hello", "opening details must preserve the message draft");
       test.field("发消息给 Agent A").setSelectionRange(5, 5);
       await test.click('[aria-label="表情"]', "");
       await test.click(".qq-emoji-picker button", "👋");
       check(test.field("发消息给 Agent A").value === "Hello👋", "emoji must insert at the draft cursor");
-      check(!test.container.querySelector(".qq-emoji-picker"), "emoji picker must close after insertion");
+      check(!test.query(".qq-emoji-picker"), "emoji picker must close after insertion");
     }
   },
   {
@@ -268,12 +435,12 @@ const cases: Array<{ name: string; run(test: Fixture): Promise<void> }> = [
       await test.fill("发消息给 Agent A", "Keep this draft");
       await test.click('[aria-label="查看聊天详情"]', "");
       await test.click('[aria-label="创建 Agent"]', "");
-      check(test.container.querySelector(".agent-dialog"), "create dialog must open above chat details");
+      check(test.query(".agent-dialog"), "create dialog must open above chat details");
       await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); });
-      check(!test.container.querySelector(".agent-dialog"), "Escape must dismiss the foreground dialog");
-      check(test.container.querySelector(".qq-chat-details"), "dismissing a dialog must preserve chat details behind it");
+      check(!test.query(".agent-dialog"), "Escape must dismiss the foreground dialog");
+      check(test.query(".qq-chat-details"), "dismissing a dialog must preserve chat details behind it");
       await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); });
-      check(!test.container.querySelector(".qq-chat-details"), "Escape must dismiss chat details when no dialog is open");
+      check(!test.query(".qq-chat-details"), "Escape must dismiss chat details when no dialog is open");
       check(test.field("发消息给 Agent A").value === "Keep this draft", "keyboard dismissal must preserve the message draft");
     }
   },
@@ -286,7 +453,7 @@ const cases: Array<{ name: string; run(test: Fixture): Promise<void> }> = [
       const readsBefore = test.reads.length;
       await test.finishImport(failed);
       check(test.selected() === "Agent B", "late Agent A completion must not change the selected agent");
-      check(test.container.querySelector(".agent-stage h2")?.textContent === "Agent B", "Agent B detail must remain visible");
+      check(test.query(".agent-stage h2")?.textContent === "Agent B", "Agent B detail must remain visible");
       check(test.field("知识内容").value === "Agent B draft", "late completion must preserve Agent B's draft");
       check(test.reads.length === readsBefore, "a stale mutation must not start another selection or refresh");
     }
@@ -308,7 +475,7 @@ const cases: Array<{ name: string; run(test: Fixture): Promise<void> }> = [
       await test.startImport();
       const originalField = test.field("知识内容");
       await test.finishImport(true);
-      await waitFor(() => Boolean(test.container.querySelector(".agent-knowledge-list")?.textContent?.includes("failed")), "failed source must become available for rebuilding");
+      await waitFor(() => Boolean(test.query(".agent-knowledge-list")?.textContent?.includes("failed")), "failed source must become available for rebuilding");
       check(test.selected() === "Agent A", "refresh must preserve Agent A selection");
       check(test.field("知识内容") === originalField, "refresh must not unmount the memory panel");
       check(test.field("知识标题").value === "Original knowledge title", "failed import must retain its title");
@@ -322,7 +489,7 @@ const cases: Array<{ name: string; run(test: Fixture): Promise<void> }> = [
       await test.startImport();
       const originalField = test.field("长期记忆");
       await test.finishImport(false);
-      await waitFor(() => Boolean(test.container.querySelector(".agent-knowledge-list")?.textContent?.includes("ready")), "indexed source must appear after success");
+      await waitFor(() => Boolean(test.query(".agent-knowledge-list")?.textContent?.includes("ready")), "indexed source must appear after success");
       check(test.field("知识内容").value === "" && test.field("知识标题").value === "", "successful import clears only the submitted knowledge fields");
       check(test.field("长期记忆") === originalField, "refresh must keep the memory editor mounted");
       check(test.field("长期记忆").value === "Unsaved memory draft", "unsubmitted memory must survive the knowledge refresh");

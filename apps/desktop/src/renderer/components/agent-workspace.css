@@ -5,7 +5,10 @@
   --agent-muted: var(--muted);
   --agent-cyan: var(--accent);
   --agent-gold: var(--accent);
-  grid-template-columns: 280px minmax(0, 1fr);
+  grid-template-columns: 280px minmax(0, 1fr) 0px;
+  position: relative;
+  overflow: hidden;
+  transition: grid-template-columns var(--motion-normal, 260ms) var(--ease-ios, ease);
   background: var(--bg);
   color: var(--text);
 }
@@ -39,7 +42,8 @@
 .qq-workspace .qq-directory-tabs button { justify-content: center; gap: 5px; min-height: 30px; padding: 0 6px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font-size: 12px; }
 .qq-workspace .qq-directory-tabs button:hover { background: var(--panel-soft); color: var(--text); }
 .qq-workspace .qq-directory-tabs button.active { color: var(--accent); background: var(--accent-soft); font-weight: 600; }
-.qq-workspace .qq-directory-scroll { min-height: 0; overflow-y: auto; padding: 0 8px 18px; overscroll-behavior: contain; }
+.qq-workspace .qq-directory-panes { min-height: 0; }
+.qq-workspace .qq-directory-scroll { display: block; min-height: 0; overflow-y: auto; padding: 0 8px 18px; overscroll-behavior: contain; }
 .qq-workspace .agent-section-label { padding: 13px 12px 8px; font-size: 11px; color: var(--muted); text-transform: none; }
 .qq-workspace .agent-section-label em { color: var(--muted); font-size: 10px; }
 .qq-workspace .agent-directory-list,
@@ -104,12 +108,15 @@
 .qq-workspace .agent-stage-actions button { width: 32px; min-height: 32px; padding: 0; border: 0; border-radius: 8px; background: transparent; color: var(--muted); }
 .qq-workspace .agent-stage-actions button:hover { background: var(--panel-soft); color: var(--text); }
 .qq-workspace .agent-stage-actions button.active { background: var(--accent-soft); color: var(--accent); }
-.qq-workspace .agent-tabs { padding: 0 20px; align-items: stretch; gap: 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.qq-workspace .agent-tabs { padding: 0 20px; align-items: stretch; gap: 14px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.qq-workspace .agent-tab-divider { flex: 0 0 1px; height: 15px; align-self: center; background: var(--line); }
+.qq-workspace .agent-tabs-context { margin-left: auto; align-self: center; color: var(--muted); font-size: 10px; white-space: nowrap; }
 .qq-workspace .agent-tabs button { position: relative; justify-content: center; min-height: 41px; gap: 5px; padding: 0 3px; border: 0; font-size: 11px; color: var(--muted); background: transparent; }
 .qq-workspace .agent-tabs button svg { width: 14px; height: 14px; }
 .qq-workspace .agent-tabs button.active { color: var(--accent); background: transparent; font-weight: 600; }
 .qq-workspace .agent-tabs button.active::after { position: absolute; bottom: 0; left: 4px; right: 4px; height: 2px; border-radius: 2px; background: var(--accent); content: ""; animation: qq-tab-reveal var(--motion-normal, 260ms) var(--ease-ios, ease) both; }
 .qq-workspace .agent-stage-body { min-width: 0; }
+.qq-workspace .agent-stage-body > .motion-panel { background: var(--bg); }
 .qq-workspace .agent-chat { position: relative; grid-template-rows: minmax(0, 1fr) 184px; }
 .qq-workspace .agent-message-list { padding: 22px 30px; gap: 21px; background: var(--bg); scroll-behavior: auto; }
 .qq-workspace .qq-chat-date { text-align: center; color: var(--muted); font-size: 10px; margin: 0 0 3px; }
@@ -169,7 +176,10 @@
 .qq-workspace .qq-welcome-actions button:first-child svg { color: #fff; }
 .qq-workspace .qq-welcome-note { margin-top: 44px; font-size: 10px; color: var(--muted); opacity: .75; }
 
-.qq-workspace .qq-chat-details { min-width: 0; min-height: 0; overflow: auto; border-left: 1px solid var(--line); background: var(--panel); animation: qq-details-enter var(--motion-normal, 260ms) var(--ease-ios, ease) both; }
+.qq-workspace .qq-details-drawer { min-width: 0; min-height: 0; overflow: hidden; }
+.qq-workspace .qq-chat-details { display: block; width: 256px; min-width: 0; min-height: 0; overflow: auto; border-left: 1px solid var(--line); background: var(--panel); }
+.qq-workspace .qq-chat-details[data-motion="entering"] { animation-name: qq-details-enter; }
+.qq-workspace .qq-chat-details[data-motion="exiting"] { animation-name: qq-details-exit; }
 .qq-workspace .qq-chat-details > header { min-height: 63px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; font-size: 13px; border-bottom: 1px solid var(--line); }
 .qq-workspace .qq-chat-details > header button { border: 0; background: transparent; color: var(--muted); }
 .qq-workspace .qq-details-identity { display: grid; justify-items: center; gap: 10px; padding: 25px 20px 16px; text-align: center; }
@@ -198,18 +208,22 @@
 
 @keyframes qq-message-enter { from { opacity: 0; transform: translateY(8px) scale(.99); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @keyframes qq-details-enter { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: translateX(0); } }
+@keyframes qq-details-exit { from { opacity: 1; transform: translateX(0); } to { opacity: 0; transform: translateX(24px); } }
 @keyframes qq-tab-reveal { from { opacity: .2; transform: scaleX(.5); } to { opacity: 1; transform: scaleX(1); } }
 
 @media (max-width: 1180px) {
   .agent-os.qq-workspace,
-  .qq-workspace.has-details { grid-template-columns: 256px minmax(0, 1fr); }
-  .qq-workspace .qq-chat-details { position: absolute; z-index: 8; top: 0; bottom: 0; right: 0; width: 272px; box-shadow: -15px 0 45px rgb(20 50 80 / 9%); }
+  .qq-workspace.has-details { grid-template-columns: 256px minmax(0, 1fr) 0px; }
+  .qq-workspace .qq-details-drawer { position: absolute; z-index: 8; top: 0; bottom: 0; right: 0; width: 272px; pointer-events: none; }
+  .qq-workspace .qq-chat-details { width: 272px; box-shadow: -15px 0 45px rgb(20 50 80 / 9%); }
+  .qq-workspace .qq-chat-details[data-motion-active="true"] { pointer-events: auto; }
+  .qq-workspace .agent-tabs-context { display: none; }
   .qq-workspace .agent-stage-head { padding: 0 18px; }
   .qq-workspace .agent-message-list { padding: 20px; }
 }
 @media (max-width: 850px) {
   .agent-os.qq-workspace,
-  .qq-workspace.has-details { grid-template-columns: 224px minmax(0, 1fr); }
+  .qq-workspace.has-details { grid-template-columns: 224px minmax(0, 1fr) 0px; }
   .qq-workspace .agent-directory-head { padding: 0 16px; }
   .qq-workspace .agent-directory-row,
   .qq-workspace .agent-inbox-row { padding: 10px 8px; gap: 8px; }
@@ -223,5 +237,7 @@
   .qq-workspace .qq-welcome-actions { gap: 8px; }
 }
 @media (prefers-reduced-motion: reduce) {
+  .agent-os.qq-workspace { transition: none; }
+  .qq-workspace .qq-chat-details[data-motion] { animation: none; }
   .qq-workspace *, .qq-workspace *::before, .qq-workspace *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }

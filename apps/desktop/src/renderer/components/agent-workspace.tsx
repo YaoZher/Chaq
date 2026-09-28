@@ -1,4 +1,4 @@
-import React, { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import React, { FormEvent, useEffect, useId, useMemo, useRef, useState } from "react";
 import {
   Activity,
   AlertCircle,
@@ -50,9 +50,24 @@ import { LatestRequestGate, isSupersededRequest } from "../lib/latest-request";
 import { PendingMessageKey } from "../lib/message-idempotency";
 import { useConversationMessages } from "../lib/use-conversation-messages";
 import { AgentProfileView } from "./agent-profile";
+import { MotionPanel } from "./motion-panel";
 import "./agent-workspace.css";
 
 type AgentTab = "chat" | "identity" | "goals" | "memory" | "relationships" | "activity";
+type DirectoryTab = "messages" | "contacts" | "discover";
+const AGENT_TABS: Array<{ id: AgentTab; label: string; icon: JSX.Element }> = [
+  { id: "chat", label: "会话", icon: <Inbox /> },
+  { id: "identity", label: "身份", icon: <Settings2 /> },
+  { id: "goals", label: "目标", icon: <Target /> },
+  { id: "memory", label: "记忆", icon: <Brain /> },
+  { id: "relationships", label: "关系", icon: <Network /> },
+  { id: "activity", label: "活动", icon: <Activity /> }
+];
+const DIRECTORY_TABS: Array<{ id: DirectoryTab; label: string; icon: JSX.Element }> = [
+  { id: "messages", label: "消息", icon: <MessageCircle size={16} /> },
+  { id: "contacts", label: "联系人", icon: <Users size={16} /> },
+  { id: "discover", label: "发现", icon: <Compass size={16} /> }
+];
 type FieldErrors = Record<string, string>;
 type HttpToolForm = {
   name: string;
@@ -71,33 +86,46 @@ export function AgentWorkspace(props: {
   providers: ModelProviderPublic[];
   skills: SkillSummary[];
   onNotice: (message: string) => void;
+  active?: boolean;
 }): JSX.Element {
+  const active = props.active !== false;
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const navigationId = useId();
   const [agents, setAgents] = useState<AgentSummary[]>([]);
   const [contacts, setContacts] = useState<AgentContact[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [agent, setAgent] = useState<AgentDetail | null>(null);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const [tab, setTab] = useState<AgentTab>("chat");
+  const chatVisibleRef = useRef(active && tab === "chat");
+  chatVisibleRef.current = active && tab === "chat";
   const { messages, messageResource } = useConversationMessages((id) => {
-    void api.markConversationRead(id).catch(() => undefined);
+    if (chatVisibleRef.current) void api.markConversationRead(id).catch(() => undefined);
   });
   const [activity, setActivity] = useState<AgentEvent[]>([]);
-  const [tab, setTab] = useState<AgentTab>("chat");
-  const [composer, setComposer] = useState("");
+  const [composer, setComposerValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [showExplore, setShowExplore] = useState(false);
   const [agentSearch, setAgentSearch] = useState("");
-  const [directoryTab, setDirectoryTab] = useState<"messages" | "contacts" | "discover">("messages");
+  const [directoryTab, setDirectoryTab] = useState<DirectoryTab>("messages");
   const [showDetails, setShowDetails] = useState(false);
   const [profileAgentId, setProfileAgentId] = useState<string | null>(null);
   const [profileInitialChat, setProfileInitialChat] = useState(false);
   const selectionRequests = useRef(new LatestRequestGate());
   const pollRequests = useRef(new LatestRequestGate());
+  const directoryRequests = useRef(new LatestRequestGate());
   const sendRequests = useRef(new LatestRequestGate());
   const selectedAgentIdRef = useRef<string | null>(null);
   const conversationIdRef = useRef<string | null>(null);
   const messageAttempt = useRef(new PendingMessageKey());
+  const composerDrafts = useRef(new Map<string, string>());
+  const composerOwner = useRef("");
+  const initialLoad = useRef(false);
+  const detailsRef = useRef<HTMLElement>(null);
+  const detailsToggleRef = useRef<HTMLButtonElement>(null);
 
   const filteredAgents = useMemo(() => {
     const query = agentSearch.trim().toLowerCase();
@@ -122,42 +150,58 @@ export function AgentWorkspace(props: {
       return `${item.title ?? ""} ${item.lastMessage?.content ?? ""} ${participants}`.toLowerCase().includes(query);
     });
   }, [conversations, agents, contacts, agentSearch]);
-  const directoryAgents = useMemo(() => {
-    if (directoryTab !== "messages") return filteredAgents;
+  const agentsWithoutConversations = useMemo(() => {
     const conversationAgentIds = new Set(conversations.flatMap((item) => item.participants.filter((participant) => participant.participantKind === "agent").map((participant) => participant.participantId)));
     return filteredAgents.filter((item) => !conversationAgentIds.has(item.id));
-  }, [filteredAgents, conversations, directoryTab]);
+  }, [filteredAgents, conversations]);
 
   useEffect(() => {
-    void refreshDirectory();
+    activeRef.current = active;
     return () => {
+      activeRef.current = false;
       selectedAgentIdRef.current = null;
       conversationIdRef.current = null;
       selectionRequests.current.cancel();
       pollRequests.current.cancel();
+      directoryRequests.current.cancel();
       sendRequests.current.cancel();
     };
   }, []);
 
   useEffect(() => {
-    if (!selectedAgentId && agents[0]) void selectAgent(agents[0].id);
-  }, [agents, selectedAgentId]);
+    if (active && !selectedAgentId && agents[0]) void selectAgent(agents[0].id);
+  }, [agents, selectedAgentId, active]);
 
   useEffect(() => {
+    if (!active) return;
+    if (initialLoad.current) void poll();
+    else {
+      initialLoad.current = true;
+      void refreshDirectory();
+    }
     const timer = setInterval(() => void poll(), 10_000);
-    return () => clearInterval(timer);
-  }, []);
+    return () => {
+      clearInterval(timer);
+      pollRequests.current.cancel();
+      directoryRequests.current.cancel();
+    };
+  }, [active]);
 
   useEffect(() => {
-    if (!showDetails || showCreate || showExplore || profileAgentId) return;
+    if (active && tab === "chat" && conversationId) void api.markConversationRead(conversationId).catch(() => undefined);
+  }, [active, tab, conversationId]);
+
+  useEffect(() => {
+    if (!active || !showDetails || showCreate || showExplore || profileAgentId) return;
     const listener = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !event.defaultPrevented) setShowDetails(false);
+      if (event.key === "Escape" && !event.defaultPrevented) closeDetails();
     };
     window.addEventListener("keydown", listener);
     return () => window.removeEventListener("keydown", listener);
-  }, [showDetails, showCreate, showExplore, profileAgentId]);
+  }, [active, showDetails, showCreate, showExplore, profileAgentId]);
 
   useEffect(() => {
+    if (!active) return;
     const listener = (event: Event) => {
       const detail = (event as CustomEvent<{ type?: string; payload?: unknown }>).detail;
       if (detail?.type !== "conversation.message") return;
@@ -165,24 +209,47 @@ export function AgentWorkspace(props: {
     };
     window.addEventListener("chaq:realtime", listener);
     return () => window.removeEventListener("chaq:realtime", listener);
-  }, [selectedAgentId, conversationId]);
+  }, [active]);
+
+  function closeDetails(): void {
+    if (detailsRef.current?.contains(document.activeElement)) detailsToggleRef.current?.focus();
+    setShowDetails(false);
+  }
+
+  function setComposer(value: string | ((current: string) => string)): void {
+    const owner = composerOwner.current;
+    setComposerValue((current) => {
+      const next = typeof value === "function" ? value(current) : value;
+      composerDrafts.current.set(owner, next);
+      return next;
+    });
+  }
+
+  function selectComposer(owner: string): void {
+    composerOwner.current = owner;
+    setComposerValue(composerDrafts.current.get(owner) ?? "");
+  }
 
   async function refreshDirectory(): Promise<void> {
+    if (!activeRef.current) return;
+    const request = directoryRequests.current.begin("directory");
     try {
-      const [nextAgents, nextContacts, nextConversations] = await Promise.all([
-        api.agents(),
-        api.agentContacts(),
-        api.conversations()
-      ]);
+      const [nextAgents, nextContacts, nextConversations] = await directoryRequests.current.guard(request, Promise.all([
+        api.agents(request.signal),
+        api.agentContacts(request.signal),
+        api.conversations(request.signal)
+      ]));
+      if (!directoryRequests.current.isCurrent(request, "directory")) return;
       setAgents(nextAgents);
       setContacts(nextContacts);
       setConversations(nextConversations);
     } catch (error) {
-      props.onNotice(messageOf(error));
+      if (!isSupersededRequest(error)) props.onNotice(messageOf(error));
     }
   }
 
   async function poll(): Promise<void> {
+    if (!activeRef.current) return;
     const agentId = selectedAgentIdRef.current;
     const activeConversationId = conversationIdRef.current;
     const resourceId = selectionResource(agentId, activeConversationId);
@@ -215,6 +282,7 @@ export function AgentWorkspace(props: {
     pollRequests.current.cancel();
     sendRequests.current.cancel();
     messageAttempt.current.clear();
+    selectComposer(`agent:${id}`);
     selectedAgentIdRef.current = id;
     conversationIdRef.current = null;
     messageResource.select(null);
@@ -238,7 +306,6 @@ export function AgentWorkspace(props: {
       setAgent(detail);
       setConversationId(conversation.id);
       setActivity(events);
-      void api.markConversationRead(conversation.id).catch(() => undefined);
     } catch (error) {
       if (!isSupersededRequest(error) && selectionRequests.current.isCurrent(request, resourceId)) props.onNotice(messageOf(error));
     } finally {
@@ -260,6 +327,7 @@ export function AgentWorkspace(props: {
     pollRequests.current.cancel();
     sendRequests.current.cancel();
     messageAttempt.current.clear();
+    selectComposer(agentId ? `agent:${agentId}` : `conversation:${conversation.id}`);
     selectedAgentIdRef.current = agentId;
     conversationIdRef.current = conversation.id;
     messageResource.select(null);
@@ -281,7 +349,6 @@ export function AgentWorkspace(props: {
         || selectedAgentIdRef.current !== agentId) return;
       setAgent(nextAgent);
       setActivity(nextActivity);
-      void api.markConversationRead(conversation.id).catch(() => undefined);
     } catch (error) {
       if (!isSupersededRequest(error) && selectionRequests.current.isCurrent(request, resourceId)) props.onNotice(messageOf(error));
     } finally {
@@ -366,13 +433,14 @@ export function AgentWorkspace(props: {
           <span className="agent-directory-actions"><button className="icon-only-button qq-add-button" title="创建 Agent" aria-label="创建 Agent" onClick={() => setShowCreate(true)}><Plus size={19} /></button></span>
         </header>
         <label className="agent-search"><Search size={16} /><input value={agentSearch} onChange={(event) => setAgentSearch(event.target.value)} placeholder="搜索 Agent" aria-label="搜索 Agent 和消息" />{agentSearch && <button type="button" title="清空搜索" aria-label="清空搜索" onClick={() => setAgentSearch("")}><X size={13} /></button>}</label>
-        <nav className="qq-directory-tabs" aria-label="通讯导航">
-          <button className={directoryTab === "messages" ? "active" : ""} aria-pressed={directoryTab === "messages"} onClick={() => setDirectoryTab("messages")}><MessageCircle size={16} />消息</button>
-          <button className={directoryTab === "contacts" ? "active" : ""} aria-pressed={directoryTab === "contacts"} onClick={() => setDirectoryTab("contacts")}><Users size={16} />联系人</button>
-          <button className={directoryTab === "discover" ? "active" : ""} aria-pressed={directoryTab === "discover"} onClick={() => setDirectoryTab("discover")}><Compass size={16} />发现</button>
+        <nav className="qq-directory-tabs" role="tablist" aria-label="通讯导航" onKeyDown={(event) => navigateTabs(event, DIRECTORY_TABS, directoryTab, setDirectoryTab)}>
+          {DIRECTORY_TABS.map((item) => <button key={item.id} id={`${navigationId}-directory-${item.id}`} role="tab" aria-controls={`${navigationId}-directory-panel-${item.id}`} tabIndex={directoryTab === item.id ? 0 : -1} className={directoryTab === item.id ? "active" : ""} aria-selected={directoryTab === item.id} onClick={() => setDirectoryTab(item.id)}>{item.icon}{item.label}</button>)}
         </nav>
-        <div className="qq-directory-scroll">
-          {directoryTab === "messages" && conversations.length > 0 && <>
+        <div className="qq-directory-panes motion-stack">
+          {DIRECTORY_TABS.map(({ id: section }) => {
+            const directoryAgents = section === "messages" ? agentsWithoutConversations : filteredAgents;
+            return <MotionPanel key={section} active={directoryTab === section} className="qq-directory-scroll" id={`${navigationId}-directory-panel-${section}`} role="tabpanel" aria-labelledby={`${navigationId}-directory-${section}`}>
+          {section === "messages" && conversations.length > 0 && <>
             <div className="agent-section-label"><span>最近会话</span><em>{filteredConversations.length}</em></div>
             <div className="agent-inbox-list">
               {filteredConversations.map((item) => {
@@ -386,7 +454,7 @@ export function AgentWorkspace(props: {
               })}
             </div>
           </>}
-          {directoryTab !== "discover" && <>
+          {section !== "discover" && <>
             {(directoryAgents.length > 0 || !agents.length) && <div className="agent-section-label"><span>我的伙伴</span><em>{directoryAgents.length}</em></div>}
             <div className="agent-directory-list">
               {directoryAgents.map((item) => (
@@ -398,7 +466,7 @@ export function AgentWorkspace(props: {
               ))}
               {!agents.length && <div className="qq-directory-empty"><div><MessageCircle size={25} /></div><strong>从第一位伙伴开始</strong><p>随时聊天，一起完成想做的事。</p><button className="agent-empty-create" onClick={() => setShowCreate(true)}><Plus size={16} />创建第一个 Agent</button></div>}
             </div>
-            {directoryTab === "contacts" && <>
+            {section === "contacts" && <>
               <div className="agent-section-label"><span>我的好友</span><em>{contacts.length}</em></div>
               <div className="agent-contact-list">
                 {filteredContacts.map((contact) => (
@@ -410,14 +478,16 @@ export function AgentWorkspace(props: {
                 {!contacts.length && <button className="agent-contact-empty" onClick={() => setShowExplore(true)}><UserPlus size={18} />发现公开 Agent 并添加好友</button>}
               </div>
             </>}
-            {agentSearch && !directoryAgents.length && (directoryTab === "messages" ? !filteredConversations.length : !filteredContacts.length) && <div className="qq-search-empty"><Search size={24} /><strong>没有找到相关结果</strong><span>试试其他名字或关键词</span></div>}
+            {agentSearch && !directoryAgents.length && (section === "messages" ? !filteredConversations.length : !filteredContacts.length) && <div className="qq-search-empty"><Search size={24} /><strong>没有找到相关结果</strong><span>试试其他名字或关键词</span></div>}
           </>}
-          {directoryTab === "discover" && <div className="qq-discovery-card"><div className="qq-discovery-icon"><Compass size={32} /></div><span className="qq-discovery-kicker">MEET YOUR NEXT PARTNER</span><h3>发现更多可能</h3><p>认识有趣的数字伙伴，<br />找到与你合拍的那一位。</p><button onClick={() => setShowExplore(true)}>发现公开 Agent<ArrowDown size={16} /></button><button className="qq-discovery-create" onClick={() => setShowCreate(true)}><Plus size={16} />创建自己的伙伴</button></div>}
+          {section === "discover" && <div className="qq-discovery-card"><div className="qq-discovery-icon"><Compass size={32} /></div><span className="qq-discovery-kicker">MEET YOUR NEXT PARTNER</span><h3>发现更多可能</h3><p>认识有趣的数字伙伴，<br />找到与你合拍的那一位。</p><button onClick={() => setShowExplore(true)}>发现公开 Agent<ArrowDown size={16} /></button><button className="qq-discovery-create" onClick={() => setShowCreate(true)}><Plus size={16} />创建自己的伙伴</button></div>}
+            </MotionPanel>;
+          })}
         </div>
         <footer className="qq-directory-footer"><span><i />你的 Chaq 空间</span><button className="icon-only-button" title="刷新列表" aria-label="刷新列表" onClick={() => void refreshDirectory()}><RefreshCw size={15} /></button></footer>
       </aside>
 
-      <main className="agent-stage">
+      <section className="agent-stage" aria-label="伙伴空间">
         {agent ? (
           <>
             <header className="agent-stage-head">
@@ -425,24 +495,20 @@ export function AgentWorkspace(props: {
               <div className="agent-stage-actions">
                 <button title="个人主页" className="icon-only-button" onClick={() => setProfileAgentId(agent.id)}><UserRound size={16} /></button>
                 <button title="刷新" className="icon-only-button" onClick={() => void poll()}><RefreshCw size={16} /></button>
-                <button title="查看聊天详情" aria-label="查看聊天详情" aria-expanded={showDetails} className={showDetails ? "icon-only-button active" : "icon-only-button"} onClick={() => setShowDetails(!showDetails)}><PanelRight size={18} /></button>
+                <button ref={detailsToggleRef} title="查看聊天详情" aria-label="查看聊天详情" aria-expanded={showDetails} aria-controls={`${navigationId}-details`} className={showDetails ? "icon-only-button active" : "icon-only-button"} onClick={() => showDetails ? closeDetails() : setShowDetails(true)}><PanelRight size={18} /></button>
               </div>
             </header>
-            <nav className="agent-tabs" role="tablist" aria-label="Agent sections">
-              <AgentTabButton active={tab === "chat"} icon={<Inbox />} label="会话" onClick={() => setTab("chat")} />
-              <AgentTabButton active={tab === "identity"} icon={<Settings2 />} label="身份" onClick={() => setTab("identity")} />
-              <AgentTabButton active={tab === "goals"} icon={<Target />} label="目标" onClick={() => setTab("goals")} />
-              <AgentTabButton active={tab === "memory"} icon={<Brain />} label="记忆" onClick={() => setTab("memory")} />
-              <AgentTabButton active={tab === "relationships"} icon={<Network />} label="关系" onClick={() => setTab("relationships")} />
-              <AgentTabButton active={tab === "activity"} icon={<Activity />} label="活动" onClick={() => setTab("activity")} />
+            <nav className="agent-tabs" role="tablist" aria-label="伙伴功能" onKeyDown={(event) => navigateTabs(event, AGENT_TABS, tab, setTab)}>
+              {AGENT_TABS.map((item, index) => <React.Fragment key={item.id}>{index === 1 && <span className="agent-tab-divider" aria-hidden="true" />}<AgentTabButton id={`${navigationId}-tab-${item.id}`} controls={`${navigationId}-panel-${item.id}`} active={tab === item.id} icon={item.icon} label={item.label} onClick={() => setTab(item.id)} /></React.Fragment>)}
+              <span className="agent-tabs-context" aria-hidden="true">{tab === "chat" ? "日常交流" : "伙伴管理"}</span>
             </nav>
-            <div className="agent-stage-body">
-              {tab === "chat" && <AgentChat agent={agent} user={props.user} messages={messages} composer={composer} setComposer={(value) => { messageAttempt.current.contentChanged(conversationIdRef.current, value); setComposer(value); }} busy={busy} thinking={agent.presence === "thinking"} onSubmit={sendMessage} onOpenMemory={() => setTab("memory")} onOpenGoals={() => setTab("goals")} onOpenActivity={() => setTab("activity")} />}
-              {tab === "identity" && <AgentIdentityEditor key={agent.id} agent={agent} providers={props.providers} onSaved={(next) => { setAgent((current) => current?.id === next.id ? next : current); void refreshDirectory(); }} onNotice={props.onNotice} />}
-              {tab === "goals" && <AgentGoals agent={agent} onChanged={() => { if (selectedAgentIdRef.current === agent.id) void poll(); }} onNotice={props.onNotice} />}
-              {tab === "memory" && <AgentMemoryPanel agent={agent} onChanged={() => { if (selectedAgentIdRef.current === agent.id) void poll(); }} onNotice={props.onNotice} />}
-              {tab === "relationships" && <AgentRelationships agent={agent} onOpenProfile={setProfileAgentId} onChanged={() => { if (selectedAgentIdRef.current === agent.id) void poll(); }} onNotice={props.onNotice} />}
-              {tab === "activity" && <AgentActivity events={activity} />}
+            <div key={agent.id} className="agent-stage-body motion-stack">
+              <MotionPanel active={tab === "chat"} id={`${navigationId}-panel-chat`} role="tabpanel" aria-labelledby={`${navigationId}-tab-chat`}><AgentChat active={active && tab === "chat"} agent={agent} user={props.user} messages={messages} composer={composer} setComposer={(value) => { messageAttempt.current.contentChanged(conversationIdRef.current, value); setComposer(value); }} busy={busy} thinking={agent.presence === "thinking"} onSubmit={sendMessage} onOpenMemory={() => setTab("memory")} onOpenGoals={() => setTab("goals")} onOpenActivity={() => setTab("activity")} /></MotionPanel>
+              <MotionPanel active={tab === "identity"} id={`${navigationId}-panel-identity`} role="tabpanel" aria-labelledby={`${navigationId}-tab-identity`}><AgentIdentityEditor agent={agent} providers={props.providers} onSaved={(next) => { setAgent((current) => current?.id === next.id ? next : current); void refreshDirectory(); }} onNotice={props.onNotice} /></MotionPanel>
+              <MotionPanel active={tab === "goals"} id={`${navigationId}-panel-goals`} role="tabpanel" aria-labelledby={`${navigationId}-tab-goals`}><AgentGoals agent={agent} onChanged={() => { if (selectedAgentIdRef.current === agent.id) void poll(); }} onNotice={props.onNotice} /></MotionPanel>
+              <MotionPanel active={tab === "memory"} id={`${navigationId}-panel-memory`} role="tabpanel" aria-labelledby={`${navigationId}-tab-memory`}><AgentMemoryPanel agent={agent} onChanged={() => { if (selectedAgentIdRef.current === agent.id) void poll(); }} onNotice={props.onNotice} /></MotionPanel>
+              <MotionPanel active={tab === "relationships"} id={`${navigationId}-panel-relationships`} role="tabpanel" aria-labelledby={`${navigationId}-tab-relationships`}><AgentRelationships agent={agent} onOpenProfile={setProfileAgentId} onChanged={() => { if (selectedAgentIdRef.current === agent.id) void poll(); }} onNotice={props.onNotice} /></MotionPanel>
+              <MotionPanel active={tab === "activity"} id={`${navigationId}-panel-activity`} role="tabpanel" aria-labelledby={`${navigationId}-tab-activity`}><AgentActivity events={activity} /></MotionPanel>
             </div>
           </>
         ) : (
@@ -450,17 +516,17 @@ export function AgentWorkspace(props: {
             {busy ? <><div className="qq-welcome-mark"><RefreshCw size={32} className="spin" /></div><h2>正在打开会话</h2><p>让对话继续。</p></> : <><div className="qq-welcome-mark"><MessageCircle size={44} strokeWidth={1.5} /><Sparkles className="qq-welcome-sparkle" size={20} /></div><span className="qq-welcome-kicker">HELLO, CHAQ</span><h2>好聊的伙伴，就在这里</h2><p>分享日常，碰撞灵感。<br />从一句「你好」开始新的故事。</p><div className="qq-welcome-actions"><button onClick={() => setShowCreate(true)}><Plus size={17} />创建 Agent</button><button onClick={() => setShowExplore(true)}><Compass size={17} />发现伙伴</button></div><span className="qq-welcome-note">选择左侧伙伴，开始聊天</span></>}
           </div>
         )}
-      </main>
+      </section>
 
-      {agent && showDetails && <aside className="qq-chat-details"><header><strong>聊天详情</strong><button className="icon-only-button" title="关闭详情" aria-label="关闭详情" onClick={() => setShowDetails(false)}><X size={18} /></button></header><div className="qq-details-identity"><AgentAvatar agent={agent} large /><h3>{agent.name}</h3><p>{agent.tagline || `@${agent.handle}`}</p><button onClick={() => setProfileAgentId(agent.id)}>查看个人主页</button></div><div className="qq-details-actions"><button onClick={() => void togglePause()}>{agent.status === "paused" ? <Play size={16} /> : <Pause size={16} />}{agent.status === "paused" ? "恢复" : "暂停"}</button><button className="agent-run-button" disabled={busy || agent.status !== "active"} onClick={() => void runNow()}><Zap size={16} />运行</button></div><AgentPulse agent={agent} events={activity} /></aside>}
-      {showExplore && <AgentExplore onClose={() => setShowExplore(false)} onOpenProfile={(id) => { setShowExplore(false); setProfileInitialChat(false); setProfileAgentId(id); }} onChanged={() => void refreshDirectory()} onNotice={props.onNotice} />}
-      {showCreate && <CreateAgentDialog providers={props.providers} skills={props.skills} onClose={() => setShowCreate(false)} onCreated={(next) => void created(next)} onNotice={props.onNotice} />}
-      {profileAgentId && <AgentProfileView key={profileAgentId} agentId={profileAgentId} user={props.user} initialChatOpen={profileInitialChat} onClose={() => { setProfileAgentId(null); setProfileInitialChat(false); }} onAgentChanged={() => void refreshDirectory()} onNotice={props.onNotice} />}
+      {agent && <aside ref={detailsRef} className="qq-details-drawer" aria-label="聊天详情" aria-hidden={!showDetails || undefined}><MotionPanel active={showDetails} className="qq-chat-details" id={`${navigationId}-details`}><header><strong>聊天详情</strong><button className="icon-only-button" title="关闭详情" aria-label="关闭详情" onClick={closeDetails}><X size={18} /></button></header><div className="qq-details-identity"><AgentAvatar agent={agent} large /><h3>{agent.name}</h3><p>{agent.tagline || `@${agent.handle}`}</p><button onClick={() => setProfileAgentId(agent.id)}>查看个人主页</button></div><div className="qq-details-actions"><button onClick={() => void togglePause()}>{agent.status === "paused" ? <Play size={16} /> : <Pause size={16} />}{agent.status === "paused" ? "恢复" : "暂停"}</button><button className="agent-run-button" disabled={busy || agent.status !== "active"} onClick={() => void runNow()}><Zap size={16} />运行</button></div><AgentPulse agent={agent} events={activity} /></MotionPanel></aside>}
+      {showExplore && <AgentExplore active={active} onClose={() => setShowExplore(false)} onOpenProfile={(id) => { setShowExplore(false); setProfileInitialChat(false); setProfileAgentId(id); }} onChanged={() => void refreshDirectory()} onNotice={props.onNotice} />}
+      {showCreate && <CreateAgentDialog active={active} providers={props.providers} skills={props.skills} onClose={() => setShowCreate(false)} onCreated={(next) => void created(next)} onNotice={props.onNotice} />}
+      {active && profileAgentId && <AgentProfileView key={profileAgentId} agentId={profileAgentId} user={props.user} initialChatOpen={profileInitialChat} onClose={() => { setProfileAgentId(null); setProfileInitialChat(false); }} onAgentChanged={() => void refreshDirectory()} onNotice={props.onNotice} />}
     </section>
   );
 }
 
-function AgentExplore(props: { onClose: () => void; onOpenProfile: (agentId: string) => void; onChanged: () => void; onNotice: (message: string) => void }): JSX.Element {
+function AgentExplore(props: { active: boolean; onClose: () => void; onOpenProfile: (agentId: string) => void; onChanged: () => void; onNotice: (message: string) => void }): JSX.Element {
   const [query, setQuery] = useState("");
   const [agents, setAgents] = useState<PublicAgentSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -468,12 +534,13 @@ function AgentExplore(props: { onClose: () => void; onOpenProfile: (agentId: str
 
   useEffect(() => { void search(); }, []);
   useEffect(() => {
+    if (!props.active) return;
     const listener = (event: KeyboardEvent) => {
       if (event.key === "Escape") props.onClose();
     };
     window.addEventListener("keydown", listener);
     return () => window.removeEventListener("keydown", listener);
-  }, [props.onClose]);
+  }, [props.active, props.onClose]);
 
   async function search(): Promise<void> {
     setLoading(true);
@@ -520,6 +587,7 @@ function AgentExplore(props: { onClose: () => void; onOpenProfile: (agentId: str
 }
 
 function AgentChat(props: {
+  active: boolean;
   agent: AgentDetail;
   user: LoginUser;
   messages: ConversationMessage[];
@@ -577,13 +645,13 @@ function AgentChat(props: {
   }, []);
 
   useEffect(() => {
-    if (!isAtBottom) return;
+    if (!props.active || !isAtBottom) return;
     const frame = window.requestAnimationFrame(() => scrollToBottom(props.messages.length > 1 ? "smooth" : "instant"));
     return () => window.cancelAnimationFrame(frame);
-  }, [props.messages.length, props.thinking, isAtBottom]);
+  }, [props.active, props.messages.length, props.thinking, isAtBottom]);
 
   useEffect(() => {
-    textareaRef.current?.focus();
+    if (props.active) textareaRef.current?.focus();
   }, [props.agent.id]);
 
   return <div className="agent-chat">
@@ -931,19 +999,20 @@ function AgentPulse(props: { agent: AgentDetail; events: AgentEvent[] }): JSX.El
   </aside>;
 }
 
-function CreateAgentDialog(props: { providers: ModelProviderPublic[]; skills: SkillSummary[]; onClose: () => void; onCreated: (agent: AgentDetail) => void; onNotice: (message: string) => void }): JSX.Element {
+function CreateAgentDialog(props: { active: boolean; providers: ModelProviderPublic[]; skills: SkillSummary[]; onClose: () => void; onCreated: (agent: AgentDetail) => void; onNotice: (message: string) => void }): JSX.Element {
   const [form, setForm] = useState({ name: "", handle: `agent-${Date.now().toString(36).slice(-5)}`, tagline: "", persona: "有稳定的自我、好奇心和行动力。", tone: "自然、直接、有分寸。", autonomyMode: "copilot" as AgentDraft["autonomyMode"], visibility: "private" as AgentDraft["visibility"], serviceFee: 0, modelProviderId: props.providers[0]?.id ?? "", model: props.providers[0]?.models[0]?.id ?? "" });
   const [busy, setBusy] = useState(false);
   const [errors, setErrors] = useState<FieldErrors>({});
   const eligibleProviders = form.visibility === "private" ? props.providers : props.providers.filter((item) => item.scope === "platform");
   const provider = eligibleProviders.find((item) => item.id === form.modelProviderId);
   useEffect(() => {
+    if (!props.active) return;
     const listener = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !busy) props.onClose();
     };
     window.addEventListener("keydown", listener);
     return () => window.removeEventListener("keydown", listener);
-  }, [busy, props.onClose]);
+  }, [busy, props.active, props.onClose]);
   const update = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
     setForm({ ...form, [key]: value });
     setErrors(clearAgentError(errors, key));
@@ -1066,8 +1135,19 @@ function AgentAvatar(props: { agent: Pick<AgentSummary, "name" | "avatarUrl" | "
   return <div className={props.large ? "agent-avatar large" : "agent-avatar"}><span>{props.agent.name.slice(0, 1).toUpperCase()}</span>{props.agent.avatarUrl ? <img src={props.agent.avatarUrl} alt="" onError={(event) => event.currentTarget.remove()} /> : null}<i className={props.agent.presence} /></div>;
 }
 
-function AgentTabButton(props: { active: boolean; icon: JSX.Element; label: string; onClick: () => void }): JSX.Element {
-  return <button className={props.active ? "active" : ""} role="tab" aria-selected={props.active} onClick={props.onClick}>{React.cloneElement(props.icon, { size: 15 })}{props.label}</button>;
+function AgentTabButton(props: { id: string; controls: string; active: boolean; icon: JSX.Element; label: string; onClick: () => void }): JSX.Element {
+  return <button id={props.id} aria-controls={props.controls} className={props.active ? "active" : ""} role="tab" aria-selected={props.active} tabIndex={props.active ? 0 : -1} onClick={props.onClick}>{React.cloneElement(props.icon, { size: 15 })}{props.label}</button>;
+}
+
+function navigateTabs<T extends string>(event: React.KeyboardEvent<HTMLElement>, tabs: Array<{ id: T }>, selected: T, onSelect: (id: T) => void): void {
+  const index = tabs.findIndex((item) => item.id === selected);
+  const next = event.key === "ArrowRight" ? (index + 1) % tabs.length
+    : event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length
+      : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : -1;
+  if (next === -1 || event.altKey || event.ctrlKey || event.metaKey) return;
+  event.preventDefault();
+  onSelect(tabs[next].id);
+  event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
 }
 
 function eventIcon(kind: string): JSX.Element {
