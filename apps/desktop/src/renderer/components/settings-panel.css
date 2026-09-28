@@ -14,21 +14,23 @@
   display: flex;
   min-height: 0;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
   padding: 26px 14px 16px;
   border-right: 1px solid var(--line);
   background: var(--panel);
 }
 
 .qq-settings-sidebar > h2 { margin: 0 10px; font-size: 21px; font-weight: 650; letter-spacing: -.5px; }
-.qq-settings-search { display: flex; height: 34px; align-items: center; gap: 7px; padding: 0 10px; border: 1px solid transparent; border-radius: 7px; background: var(--input); color: var(--muted); }
+.qq-settings-search { display: flex; height: 34px; flex-shrink: 0; align-items: center; gap: 7px; padding: 0 10px; border: 1px solid transparent; border-radius: 7px; background: var(--input); color: var(--muted); }
 .qq-settings-search:focus-within { border-color: var(--accent); background: var(--panel); }
 .qq-settings .qq-settings-search input { width: 100%; min-width: 0; height: auto; padding: 0; border: 0; outline: 0; border-radius: 0; box-shadow: none; background: transparent; color: var(--text); font-size: 12px; }
 .qq-settings-search input::-webkit-search-cancel-button { display: none; }
 .qq-settings .qq-settings-search button { display: grid; width: 20px; height: 20px; padding: 0; flex: 0 0 20px; place-items: center; border: 0; border-radius: 4px; background: transparent; color: var(--muted); }
 .qq-settings-search > svg { flex: 0 0 auto; }
-.qq-settings-sidebar nav { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 5px; overflow-y: auto; }
-.qq-settings .qq-settings-sidebar nav button { position: relative; display: flex; min-height: 42px; flex: 0 0 auto; align-items: center; justify-content: flex-start; gap: 11px; padding: 10px 13px; border: 0; border-radius: 7px; background: transparent; color: var(--text); text-align: left; font-size: 13px; font-weight: 450; transition: color var(--motion-fast, 180ms), background var(--motion-fast, 180ms); }
+.qq-settings-sidebar nav { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 12px; overflow-y: auto; }
+.qq-settings-navigation-group { display: flex; flex: 0 0 auto; flex-direction: column; gap: 3px; }
+.qq-settings-navigation-label { padding: 0 13px 4px; color: var(--muted); font-size: 10px; line-height: 1.5; letter-spacing: .5px; }
+.qq-settings .qq-settings-sidebar nav button { position: relative; display: flex; min-height: 39px; flex: 0 0 auto; align-items: center; justify-content: flex-start; gap: 11px; padding: 8px 13px; border: 0; border-radius: 7px; background: transparent; color: var(--text); text-align: left; font-size: 13px; font-weight: 450; transition: color var(--motion-fast, 180ms), background var(--motion-fast, 180ms); }
 .qq-settings .qq-settings-sidebar nav button > svg { flex: 0 0 auto; color: var(--muted); stroke-width: 1.7; }
 .qq-settings .qq-settings-sidebar nav button:hover { background: var(--panel-soft); }
 .qq-settings .qq-settings-sidebar nav button.is-active { background: var(--accent-soft); color: var(--accent); font-weight: 550; }
@@ -40,11 +42,12 @@
 .qq-settings-account small { color: var(--muted); font-size: 10px; }
 .qq-settings-account > svg { color: var(--muted); }
 
-.qq-settings-main { min-width: 0; min-height: 0; padding: 29px 34px 40px; overflow-y: auto; overscroll-behavior: contain; }
+.qq-settings-main { min-width: 0; min-height: 0; overflow: hidden; }
+.qq-settings-page { display: block; min-width: 0; min-height: 0; padding: 29px 34px 40px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .qq-settings-heading { margin-bottom: 30px; }
 .qq-settings-heading h2 { margin: 0; color: var(--text); font-size: 21px; font-weight: 650; letter-spacing: -.45px; }
 .qq-settings-heading p { margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
-.qq-settings-sections { display: grid; align-content: start; gap: 27px; max-width: 830px; animation: qq-settings-appear 260ms var(--ease-ios, cubic-bezier(.22, 1, .36, 1)) both; }
+.qq-settings-sections { display: grid; align-content: start; gap: 27px; max-width: 830px; }
 .qq-settings-group { min-width: 0; }
 .qq-settings-group > h3 { margin: 0 0 11px 2px; color: var(--muted); font-size: 12px; font-weight: 550; }
 .qq-settings-card { overflow: hidden; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
@@ -126,12 +129,10 @@
 .qq-settings-empty strong { color: var(--text); font-size: 15px; font-weight: 500; }
 .qq-settings-empty p { margin: 0 0 6px; font-size: 12px; }
 
-@keyframes qq-settings-appear { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
-
 @media (max-width: 760px) {
   .qq-settings { grid-template-columns: 162px minmax(0, 1fr); }
   .qq-settings-sidebar { padding: 24px 10px 14px; }
-  .qq-settings-main { padding: 26px 20px 32px; }
+  .qq-settings-page { padding: 26px 20px 32px; }
   .qq-setting { margin: 0 15px; }
   .qq-settings-themes { gap: 10px; }
   .qq-settings-theme-preview { height: 78px; }
@@ -143,9 +144,12 @@
   .qq-settings-sidebar { gap: 12px; padding: 16px 16px 10px; border-right: 0; border-bottom: 1px solid var(--line); }
   .qq-settings-sidebar > h2, .qq-settings .qq-settings-account { display: none; }
   .qq-settings-sidebar nav { flex-direction: row; gap: 4px; overflow-x: auto; }
+  .qq-settings-navigation-group { flex-direction: row; gap: 4px; }
+  .qq-settings-navigation-group + .qq-settings-navigation-group { margin-left: 4px; padding-left: 8px; border-left: 1px solid var(--line); }
+  .qq-settings-navigation-label { display: none; }
   .qq-settings .qq-settings-sidebar nav button { min-height: 36px; gap: 6px; }
   .qq-settings-sidebar nav button > svg { width: 15px; height: 15px; }
-  .qq-settings-main { padding: 20px 16px 30px; }
+  .qq-settings-page { padding: 20px 16px 30px; }
   .qq-settings-heading { margin-bottom: 23px; }
   .qq-setting-row { gap: 14px; }
   .qq-settings-theme-label { font-size: 11px; }

@@ -14,6 +14,7 @@ function fixture() {
   const previews: Partial<UserSettings>[] = [];
   const actions: string[] = [];
   const container = document.createElement("div");
+  container.style.cssText = "width: 980px; height: 596px";
   document.getElementById("root")!.append(container);
   const root = createRoot(container);
 
@@ -33,13 +34,13 @@ function fixture() {
   }
 
   function field(label: string): HTMLInputElement | HTMLSelectElement {
-    const element = container.querySelector<HTMLInputElement | HTMLSelectElement>(`[aria-label="${label}"]`);
+    const element = Array.from(container.querySelectorAll<HTMLInputElement | HTMLSelectElement>(`input[aria-label="${label}"], select[aria-label="${label}"]`)).find((control) => !control.closest('[aria-hidden="true"]'));
     check(element, `missing setting ${label}`);
     return element;
   }
 
   async function click(text: string, selector = "button"): Promise<void> {
-    const button = Array.from(container.querySelectorAll<HTMLElement>(selector)).find((element) => element.textContent === text);
+    const button = Array.from(container.querySelectorAll<HTMLElement>(selector)).find((element) => element.textContent === text && !element.closest('[aria-hidden="true"]'));
     check(button, `missing control ${text}`);
     await act(async () => { button.click(); });
   }
@@ -56,6 +57,11 @@ function fixture() {
 
   return {
     container, saves, previews, actions, field, click, fill,
+    page: () => {
+      const page = container.querySelector<HTMLElement>('.qq-settings-page[data-motion-active="true"]');
+      check(page, "a settings page must be active");
+      return page;
+    },
     mount: async () => { await act(async () => { root.render(<Harness />); }); },
     dispose: async () => { await act(async () => { root.unmount(); }); container.remove(); }
   };
@@ -67,14 +73,14 @@ const cases: Array<{ name: string; run(test: Fixture): Promise<void> }> = [
     name: "settings search finds controls across sections and recovers from empty results",
     async run(test) {
       await test.fill("搜索设置", "密码");
-      check(test.container.querySelector(".qq-settings-main")?.textContent?.includes("修改密码"), "search must find account controls outside the current section");
+      check(test.page().textContent?.includes("修改密码"), "search must find account controls outside the current section");
       await test.click("修改密码");
       check(test.actions[0] === "profile", "a search result must keep its real action");
       await test.fill("搜索设置", "does-not-match-any-setting");
-      check(test.container.querySelector("[role=status]")?.textContent?.includes("没有找到相关设置"), "empty search must give feedback");
+      check(test.page().querySelector("[role=status]")?.textContent?.includes("没有找到相关设置"), "empty search must give feedback");
       await test.click("消息通知", "nav button");
       check(test.field("搜索设置").value === "", "category navigation must clear the search");
-      check(test.container.querySelectorAll("[role=switch]").length === 2, "category navigation must restore its setting controls");
+      check(test.page().querySelectorAll("[role=switch]").length === 2, "category navigation must restore its setting controls");
     }
   },
   {
@@ -95,7 +101,7 @@ const cases: Array<{ name: string; run(test: Fixture): Promise<void> }> = [
       check(!test.field("背景遮罩").disabled, "custom background must enable its shading control");
       check(test.container.querySelector('.qq-settings-main')?.tagName === "SECTION", "settings content must not create a nested main landmark");
       check(test.container.querySelector('.qq-settings-main')?.getAttribute("aria-label") === "外观", "settings content must name the active category");
-      const dark = test.container.querySelector<HTMLInputElement>('input[type="radio"][value="dark"]');
+      const dark = test.page().querySelector<HTMLInputElement>('input[type="radio"][value="dark"]');
       check(dark, "dark theme option must exist");
       await act(async () => { dark.click(); });
       check(dark.checked && test.saves[0].theme === "dark", "theme selection must save the selected radio value");
@@ -103,9 +109,9 @@ const cases: Array<{ name: string; run(test: Fixture): Promise<void> }> = [
       check(test.actions[0] === "background", "image selection must invoke the existing image picker");
       await test.click("恢复默认");
       check(test.saves[1].backgroundUrl === null, "reset must clear the custom background");
-      check(!test.container.querySelector(".qq-settings-background-preview img"), "reset must display the default preview");
+      check(!test.page().querySelector(".qq-settings-background-preview img"), "reset must display the default preview");
       check(test.field("背景遮罩").disabled, "default background must disable its ineffective shading control");
-      check(test.container.querySelector(".qq-settings-main")?.textContent?.includes("选择背景图片后，可调整背景遮罩"), "disabled shading must explain how to enable it");
+      check(test.page().textContent?.includes("选择背景图片后，可调整背景遮罩"), "disabled shading must explain how to enable it");
       check(!test.field("窗口透明度").disabled, "default background must preserve the independent window opacity control");
     }
   },
@@ -135,7 +141,34 @@ const cases: Array<{ name: string; run(test: Fixture): Promise<void> }> = [
       await test.click("Sign out", "button");
       check(JSON.stringify(test.actions) === JSON.stringify(["profile", "logout"]), "profile editing and sign out must invoke their real callbacks");
       await test.fill("Search settings", "theme");
-      check(test.container.querySelector('[role="radiogroup"]')?.getAttribute("aria-label") === "Choose a theme", "English search must show accessible theme controls");
+      check(test.page().querySelector('[role="radiogroup"]')?.getAttribute("aria-label") === "Choose a theme", "English search must show accessible theme controls");
+    }
+  },
+  {
+    name: "settings categories retain scroll and search shares saved values without stealing radio selection",
+    async run(test) {
+      await test.click("外观", "nav button");
+      const appearance = test.page();
+      appearance.scrollTop = 140;
+      const savedScroll = appearance.scrollTop;
+      check(Math.abs(savedScroll - 140) < 1, "appearance fixture must have scrollable content at the current display scale");
+      const appearanceLight = appearance.querySelector<HTMLInputElement>('input[type="radio"][value="light"]')!;
+      await test.click("消息通知", "nav button");
+      check(appearance.getAttribute("aria-hidden") === "true" && appearance.inert, "the inactive category must be removed from keyboard and accessibility navigation");
+      await test.click("外观", "nav button");
+      check(test.page() === appearance && Math.abs(appearance.scrollTop - savedScroll) < 1, "returning to appearance must preserve its page and scroll position");
+      await test.fill("搜索设置", "主题");
+      const searchPage = test.page();
+      const searchLight = searchPage.querySelector<HTMLInputElement>('input[type="radio"][value="light"]')!;
+      check(appearanceLight.checked && searchLight.checked && appearanceLight.name !== searchLight.name, "search and retained categories must use independent native radio groups");
+      await test.fill("搜索设置", "深色");
+      check(test.page() === searchPage, "typing a search query must keep the same results page");
+      const dark = searchPage.querySelector<HTMLInputElement>('input[type="radio"][value="dark"]')!;
+      await act(async () => { dark.click(); });
+      await test.click("外观", "nav button");
+      check(test.page() === appearance && Math.abs(appearance.scrollTop - savedScroll) < 1, "leaving search must restore the category's scroll position");
+      check(appearance.querySelector<HTMLInputElement>('input[type="radio"][value="dark"]')?.checked, "a setting saved in search must remain selected in its category");
+      check(test.saves.length === 1 && test.saves[0].theme === "dark", "search theme selection must save exactly once");
     }
   }
 ];

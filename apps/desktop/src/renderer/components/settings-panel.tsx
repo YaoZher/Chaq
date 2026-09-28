@@ -3,6 +3,7 @@ import { Bell, Check, ChevronRight, HardDrive, Info, Keyboard, LogOut, Monitor, 
 import type { LoginUser, UserSettings } from "../lib/api";
 import defaultAvatarUrl from "../assets/chaq-default-avatar-v2.png";
 import { version } from "../../../package.json";
+import { MotionPanel } from "./motion-panel";
 import "./settings-panel.css";
 
 export type SettingsCategory = "general" | "account" | "messages" | "appearance" | "storage" | "shortcuts" | "about" | "display";
@@ -37,9 +38,9 @@ type SettingGroup = {
 
 export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
   const [query, setQuery] = useState("");
+  const [lastSearch, setLastSearch] = useState("");
   const en = props.activeSettings.language === "en";
   const t = (zh: string, english: string) => en ? english : zh;
-  const languageId = useId();
   const section = props.settingsSection === "display" ? "appearance" : props.settingsSection;
   const sections: Array<{ id: SettingsCategory; label: string; icon: ReactNode }> = [
     { id: "general", label: t("通用", "General"), icon: <Settings size={18} /> },
@@ -50,9 +51,23 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
     { id: "shortcuts", label: t("快捷键", "Shortcuts"), icon: <Keyboard size={18} /> },
     { id: "about", label: t("关于 Chaq", "About Chaq"), icon: <Info size={18} /> }
   ];
+  const navigationGroups = [
+    { label: t("常用设置", "Everyday"), categories: ["general", "account", "messages"] },
+    { label: t("个性化", "Personalization"), categories: ["appearance", "shortcuts"] },
+    { label: t("应用管理", "Application"), categories: ["storage", "about"] }
+  ];
+  const descriptions: Record<Exclude<SettingsCategory, "display">, string> = {
+    general: t("调整语言，让使用更顺手。", "Set the language that feels familiar."),
+    account: t("管理个人资料、邮箱和登录安全。", "Manage your profile, email and sign-in security."),
+    messages: t("选择新消息提醒你的方式。", "Choose how Chaq lets you know about new messages."),
+    appearance: t("选择主题与背景，打造自己的聊天空间。", "Make your chat space yours with a theme and background."),
+    storage: t("了解聊天记录与应用数据的保存方式。", "See how your chat history and app data are stored."),
+    shortcuts: t("用熟悉的按键，更快完成日常操作。", "Use familiar keys to move through everyday tasks."),
+    about: t("查看当前版本与应用信息。", "Find the current version and app information.")
+  };
   const groups: SettingGroup[] = [
     { id: "language", category: "general", title: t("基本设置", "Preferences"), items: [
-      { id: "language", label: t("显示语言", "Display language"), description: t("选择设置页面的显示语言", "Choose the language for settings"), keywords: "中文 English language 语言", control: <select id={languageId} aria-label={t("显示语言", "Display language")} value={props.activeSettings.language} onChange={(event) => props.saveSettings({ language: event.target.value as UserSettings["language"] })}><option value="zh">简体中文</option><option value="en">English</option></select> }
+      { id: "language", label: t("显示语言", "Display language"), description: t("选择设置页面的显示语言", "Choose the language for settings"), keywords: "中文 English language 语言", control: <select aria-label={t("显示语言", "Display language")} value={props.activeSettings.language} onChange={(event) => props.saveSettings({ language: event.target.value as UserSettings["language"] })}><option value="zh">简体中文</option><option value="en">English</option></select> }
     ] },
     { id: "account", category: "account", title: t("我的账号", "My account"), items: [
       { id: "profile", label: t("个人资料", "Profile"), keywords: "头像 昵称 avatar nickname profile", content: <div className="qq-settings-profile"><img src={props.user?.avatarUrl || defaultAvatarUrl} alt="" onError={(event) => { if (event.currentTarget.getAttribute("src") !== defaultAvatarUrl) event.currentTarget.src = defaultAvatarUrl; }} /><div><strong>{props.user?.displayName || t("尚未登录", "Not signed in")}</strong><span>{props.user?.username ? `@${props.user.username}` : "Chaq"}</span></div>{props.user && props.onEditProfile && <button type="button" className="qq-settings-secondary" onClick={props.onEditProfile}>{t("编辑资料", "Edit profile")}<ChevronRight size={14} /></button>}</div> },
@@ -67,11 +82,7 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
       { id: "flash", label: t("任务栏图标闪烁", "Taskbar icon flash"), description: t("窗口在后台时，闪烁图标提醒新消息", "Flash the taskbar icon for new messages while Chaq is in the background"), keywords: "闪烁 flash notification 任务栏", control: <SettingSwitch label={t("任务栏图标闪烁", "Taskbar icon flash")} checked={props.activeSettings.iconFlash ?? true} onChange={(iconFlash) => props.saveSettings({ iconFlash })} /> }
     ] },
     { id: "theme", category: "appearance", title: t("主题", "Theme"), items: [
-      { id: "theme", label: t("选择主题", "Choose a theme"), description: t("让 Chaq 更合你的心意", "Make Chaq feel like you"), keywords: "theme dark light system 主题 深色 浅色 跟随系统", content: <div className="qq-settings-themes" role="radiogroup" aria-label={t("选择主题", "Choose a theme")}>{([
-        { value: "light", label: t("浅色", "Light"), icon: <Sun size={15} /> },
-        { value: "dark", label: t("深色", "Dark"), icon: <Moon size={15} /> },
-        { value: "system", label: t("跟随系统", "System"), icon: <Monitor size={15} /> }
-      ] as const).map((theme) => <label key={theme.value} className={`qq-settings-theme ${props.activeSettings.theme === theme.value ? "is-selected" : ""}`}><input type="radio" name={`${languageId}-theme`} value={theme.value} checked={props.activeSettings.theme === theme.value} onChange={() => props.saveSettings({ theme: theme.value })} /><span className={`qq-settings-theme-preview is-${theme.value}`} aria-hidden="true"><i /><span><b /><b /><b /></span><em><b /><b /></em><span className="qq-settings-theme-check"><Check size={11} /></span></span><span className="qq-settings-theme-label">{theme.icon}{theme.label}</span></label>)}</div> }
+      { id: "theme", label: t("选择主题", "Choose a theme"), description: t("让 Chaq 更合你的心意", "Make Chaq feel like you"), keywords: "theme dark light system 主题 深色 浅色 跟随系统", content: <SettingThemes value={props.activeSettings.theme} onChange={(theme) => props.saveSettings({ theme })} en={en} /> }
     ] },
     { id: "background", category: "appearance", title: t("聊天背景", "Chat background"), items: [
       { id: "background", label: t("背景图片", "Background image"), keywords: "background image photo 背景 图片 照片", content: <div className="qq-settings-background"><div className={`qq-settings-background-preview ${props.activeSettings.backgroundUrl ? "has-image" : ""}`}>{props.activeSettings.backgroundUrl && <img src={props.activeSettings.backgroundUrl} alt={t("当前聊天背景", "Current chat background")} />}<span>{t("每一次对话，都有新的可能", "A little space for new possibilities")}</span></div><div className="qq-settings-background-actions"><span>{props.activeSettings.backgroundUrl ? t("自定义背景", "Custom background") : t("默认背景", "Default background")}</span><button type="button" className="qq-settings-secondary" onClick={props.chooseBackgroundImage}>{t("选择图片", "Choose image")}</button>{props.activeSettings.backgroundUrl && <button type="button" className="qq-settings-link" onClick={() => props.saveSettings({ backgroundUrl: null })}>{t("恢复默认", "Reset")}</button>}</div></div> },
@@ -92,13 +103,15 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
     ] }
   ];
   const search = query.trim().toLocaleLowerCase();
-  const visibleGroups = groups.flatMap((group) => {
-    if (!search) return group.category === section ? [group] : [];
+  // Keep the outgoing results intact while their panel finishes fading out.
+  const displayedSearch = search || lastSearch;
+  const searchGroups = groups.flatMap((group) => {
+    if (!displayedSearch) return [];
     const category = sections.find((item) => item.id === group.category)?.label ?? "";
-    const items = group.items.filter((item) => `${category} ${group.title} ${item.label} ${item.description ?? ""} ${item.keywords ?? ""}`.toLocaleLowerCase().includes(search));
+    const items = group.items.filter((item) => `${category} ${group.title} ${item.label} ${item.description ?? ""} ${item.keywords ?? ""}`.toLocaleLowerCase().includes(displayedSearch));
     return items.length ? [{ ...group, items }] : [];
   });
-  const resultCount = visibleGroups.reduce((count, group) => count + group.items.length, 0);
+  const resultCount = searchGroups.reduce((count, group) => count + group.items.length, 0);
   const navigate = (next: SettingsCategory) => {
     setQuery("");
     props.openSettingsSection(next);
@@ -107,18 +120,39 @@ export function SettingsPanel(props: SettingsPanelProps): JSX.Element {
   return <div className="qq-settings">
     <aside className="qq-settings-sidebar">
       <h2>{t("设置", "Settings")}</h2>
-      <div className="qq-settings-search"><Search size={15} aria-hidden="true" /><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder={t("搜索设置", "Search settings")} aria-label={t("搜索设置", "Search settings")} />{query && <button type="button" aria-label={t("清除搜索", "Clear search")} onClick={() => setQuery("")}><X size={13} /></button>}</div>
-      <nav aria-label={t("设置分类", "Settings sections")}>{sections.map((item) => <button type="button" key={item.id} aria-current={!search && item.id === section ? "page" : undefined} className={!search && item.id === section ? "is-active" : ""} onClick={() => navigate(item.id)}>{item.icon}<span>{item.label}</span></button>)}</nav>
+      <div className="qq-settings-search"><Search size={15} aria-hidden="true" /><input type="search" value={query} onChange={(event) => { const value = event.target.value; setQuery(value); if (value.trim()) setLastSearch(value.trim().toLocaleLowerCase()); }} placeholder={t("搜索设置", "Search settings")} aria-label={t("搜索设置", "Search settings")} />{query && <button type="button" aria-label={t("清除搜索", "Clear search")} onClick={() => setQuery("")}><X size={13} /></button>}</div>
+      <nav aria-label={t("设置分类", "Settings sections")}>{navigationGroups.map((group) => <div className="qq-settings-navigation-group" role="group" aria-label={group.label} key={group.categories[0]}><span className="qq-settings-navigation-label" aria-hidden="true">{group.label}</span>{group.categories.map((category) => {
+        const item = sections.find((entry) => entry.id === category)!;
+        return <button type="button" key={item.id} aria-current={!search && item.id === section ? "page" : undefined} className={!search && item.id === section ? "is-active" : ""} onClick={() => navigate(item.id)}>{item.icon}<span>{item.label}</span></button>;
+      })}</div>)}</nav>
       {props.user && <button type="button" className="qq-settings-account" onClick={() => navigate("account")} aria-label={t("打开账号设置", "Open account settings")}><img src={props.user.avatarUrl || defaultAvatarUrl} alt="" onError={(event) => { if (event.currentTarget.getAttribute("src") !== defaultAvatarUrl) event.currentTarget.src = defaultAvatarUrl; }} /><span><strong>{props.user.displayName}</strong><small>{t("账号与安全", "Account & security")}</small></span><ChevronRight size={14} /></button>}
     </aside>
-    <section className="qq-settings-main" aria-label={search ? t("搜索结果", "Search results") : sections.find((item) => item.id === section)?.label}>
-      <header className="qq-settings-heading"><h2>{search ? t("搜索结果", "Search results") : sections.find((item) => item.id === section)?.label}</h2><p>{search ? t(`找到 ${resultCount} 项设置`, `${resultCount} ${resultCount === 1 ? "setting" : "settings"} found`) : t("每个细节，都按你的习惯。", "The little things, just how you like them.")}</p></header>
-      <div key={search ? "search" : section} className="qq-settings-sections">
-        {visibleGroups.map((group) => <section className="qq-settings-group" key={group.id} aria-label={group.title}><h3>{search ? `${sections.find((item) => item.id === group.category)?.label} · ${group.title}` : group.title}</h3><div className="qq-settings-card">{group.items.map((item) => <div key={item.id} className={`qq-setting ${item.content ? "qq-setting-stacked" : ""}`}><div className="qq-setting-row"><div className="qq-setting-copy"><strong>{item.label}</strong>{item.description && <p>{item.description}</p>}</div>{item.control && <div className="qq-setting-control">{item.control}</div>}</div>{item.content}</div>)}</div></section>)}
-        {search && resultCount === 0 && <div className="qq-settings-empty" role="status"><Search size={32} /><strong>{t("没有找到相关设置", "No settings found")}</strong><p>{t("试试“主题”“消息”或“密码”", "Try “theme”, “sound” or “password”")}</p><button type="button" className="qq-settings-secondary" onClick={() => setQuery("")}>{t("清除搜索", "Clear search")}</button></div>}
-      </div>
+    <section className="qq-settings-main motion-stack" aria-label={search ? t("搜索结果", "Search results") : sections.find((item) => item.id === section)?.label}>
+      {sections.map((item) => <MotionPanel key={item.id} active={!search && item.id === section} className="qq-settings-page" data-settings-page={item.id}>
+        <header className="qq-settings-heading"><h2>{item.label}</h2><p>{descriptions[item.id as Exclude<SettingsCategory, "display">]}</p></header>
+        <SettingGroups groups={groups.filter((group) => group.category === item.id)} />
+      </MotionPanel>)}
+      <MotionPanel active={Boolean(search)} className="qq-settings-page" data-settings-page="search" unmountOnExit>
+        <header className="qq-settings-heading"><h2>{t("搜索结果", "Search results")}</h2><p aria-live="polite">{t(`找到 ${resultCount} 项设置`, `${resultCount} ${resultCount === 1 ? "setting" : "settings"} found`)}</p></header>
+        <SettingGroups groups={searchGroups} categoryLabel={(category) => sections.find((item) => item.id === category)?.label ?? ""} />
+        {resultCount === 0 && <div className="qq-settings-empty" role="status"><Search size={32} /><strong>{t("没有找到相关设置", "No settings found")}</strong><p>{t("试试“主题”“消息”或“密码”", "Try “theme”, “sound” or “password”")}</p><button type="button" className="qq-settings-secondary" onClick={() => setQuery("")}>{t("清除搜索", "Clear search")}</button></div>}
+      </MotionPanel>
     </section>
   </div>;
+}
+
+function SettingGroups(props: { groups: SettingGroup[]; categoryLabel?: (category: SettingsCategory) => string }): JSX.Element {
+  return <div className="qq-settings-sections">{props.groups.map((group) => <section className="qq-settings-group" key={group.id} aria-label={group.title}><h3>{props.categoryLabel ? `${props.categoryLabel(group.category)} · ${group.title}` : group.title}</h3><div className="qq-settings-card">{group.items.map((item) => <div key={item.id} className={`qq-setting ${item.content ? "qq-setting-stacked" : ""}`}><div className="qq-setting-row"><div className="qq-setting-copy"><strong>{item.label}</strong>{item.description && <p>{item.description}</p>}</div>{item.control && <div className="qq-setting-control">{item.control}</div>}</div>{item.content}</div>)}</div></section>)}</div>;
+}
+
+function SettingThemes(props: { value: UserSettings["theme"]; onChange: (value: UserSettings["theme"]) => void; en: boolean }): JSX.Element {
+  const name = useId();
+  const themes = [
+    { value: "light", label: props.en ? "Light" : "浅色", icon: <Sun size={15} /> },
+    { value: "dark", label: props.en ? "Dark" : "深色", icon: <Moon size={15} /> },
+    { value: "system", label: props.en ? "System" : "跟随系统", icon: <Monitor size={15} /> }
+  ] as const;
+  return <div className="qq-settings-themes" role="radiogroup" aria-label={props.en ? "Choose a theme" : "选择主题"}>{themes.map((theme) => <label key={theme.value} className={`qq-settings-theme ${props.value === theme.value ? "is-selected" : ""}`}><input type="radio" name={`${name}-theme`} value={theme.value} checked={props.value === theme.value} onChange={() => props.onChange(theme.value)} /><span className={`qq-settings-theme-preview is-${theme.value}`} aria-hidden="true"><i /><span><b /><b /><b /></span><em><b /><b /></em><span className="qq-settings-theme-check"><Check size={11} /></span></span><span className="qq-settings-theme-label">{theme.icon}{theme.label}</span></label>)}</div>;
 }
 
 function SettingSwitch(props: { label: string; checked: boolean; onChange: (checked: boolean) => void }): JSX.Element {
