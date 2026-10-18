@@ -1,0 +1,34 @@
+dialog.chaq-modal {
+  position: fixed;
+  inset: 44px 0 0;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 24px;
+  overflow: auto;
+  border: 0;
+  border-radius: 0;
+  outline: none;
+  color: var(--text);
+  background: var(--overlay);
+  box-shadow: none;
+  animation: chaq-modal-enter 180ms ease both;
+}
+
+dialog.chaq-modal:not([open]) { display: none !important; }
+dialog.chaq-modal::backdrop { background: transparent; }
+
+@keyframes chaq-modal-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  dialog.chaq-modal { animation: none; }
+}

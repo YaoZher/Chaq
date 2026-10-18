@@ -10,6 +10,7 @@ import { runWorkspaceLifecycleCases } from "./workspace-lifecycle";
 import { runSettingsLifecycleCases } from "./settings-lifecycle";
 import "../src/renderer/styles.css";
 import { runMotionLifecycleCases } from "./motion-lifecycle";
+import { runDialogLifecycleCases } from "./dialog-lifecycle";
 
 type Result = { name: string; passed: boolean; error?: string };
 declare global {
@@ -367,6 +368,7 @@ async function main() {
   results.push(...await runWorkspaceLifecycleCases());
   results.push(...await runSettingsLifecycleCases());
   results.push(...await runMotionLifecycleCases());
+  results.push(...await runDialogLifecycleCases());
   window.sessionTest.complete(results);
 }
 
