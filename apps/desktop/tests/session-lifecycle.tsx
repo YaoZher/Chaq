@@ -11,6 +11,7 @@ import { runSettingsLifecycleCases } from "./settings-lifecycle";
 import "../src/renderer/styles.css";
 import { runMotionLifecycleCases } from "./motion-lifecycle";
 import { runDialogLifecycleCases } from "./dialog-lifecycle";
+import { runProfileLifecycleCases } from "./profile-lifecycle";
 
 type Result = { name: string; passed: boolean; error?: string };
 declare global {
@@ -369,6 +370,7 @@ async function main() {
   results.push(...await runSettingsLifecycleCases());
   results.push(...await runMotionLifecycleCases());
   results.push(...await runDialogLifecycleCases());
+  results.push(...await runProfileLifecycleCases());
   window.sessionTest.complete(results);
 }
 

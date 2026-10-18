@@ -1,0 +1,59 @@
+dialog.chaq-modal.agent-profile-overlay {
+  padding: 0;
+  place-items: stretch;
+  background: var(--panel);
+  overflow: hidden;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.agent-profile-overlay .agent-profile-loading {
+  padding: 32px;
+  text-align: center;
+}
+
+.agent-profile-overlay .agent-profile-loading h1 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.agent-profile-loading p,
+.agent-profile-recovery p,
+.agent-profile-chat-state p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.agent-profile-recovery-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.agent-profile-overlay .agent-profile-recovery {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 16px 24px 52px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-soft);
+  font-size: 13px;
+}
+
+.agent-profile-recovery > div { min-width: 0; }
+.agent-profile-recovery > button { flex-shrink: 0; }
+
+.agent-profile-overlay .agent-profile-chat-state {
+  display: grid;
+  justify-items: start;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-soft);
+  font-size: 13px;
+}
