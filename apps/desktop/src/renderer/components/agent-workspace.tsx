@@ -51,6 +51,7 @@ import { PendingMessageKey } from "../lib/message-idempotency";
 import { useConversationMessages } from "../lib/use-conversation-messages";
 import { AgentProfileView } from "./agent-profile";
 import { MotionPanel } from "./motion-panel";
+import { ModalDialog } from "./modal-dialog";
 import "./agent-workspace.css";
 
 type AgentTab = "chat" | "identity" | "goals" | "memory" | "relationships" | "activity";
@@ -97,6 +98,10 @@ export function AgentWorkspace(props: {
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
   const [agent, setAgent] = useState<AgentDetail | null>(null);
   const [conversations, setConversations] = useState<ConversationSummary[]>([]);
+  const [directoryLoaded, setDirectoryLoaded] = useState(false);
+  const [directoryLoading, setDirectoryLoading] = useState(true);
+  const [directoryError, setDirectoryError] = useState("");
+  const [selectionError, setSelectionError] = useState("");
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [tab, setTab] = useState<AgentTab>("chat");
   const chatVisibleRef = useRef(active && tab === "chat");
@@ -124,6 +129,7 @@ export function AgentWorkspace(props: {
   const composerDrafts = useRef(new Map<string, string>());
   const composerOwner = useRef("");
   const initialLoad = useRef(false);
+  const pendingSelection = useRef<{ agentId: string } | { conversation: ConversationSummary } | null>(null);
   const detailsRef = useRef<HTMLElement>(null);
   const detailsToggleRef = useRef<HTMLButtonElement>(null);
 
@@ -169,7 +175,7 @@ export function AgentWorkspace(props: {
   }, []);
 
   useEffect(() => {
-    if (active && !selectedAgentId && agents[0]) void selectAgent(agents[0].id);
+    if (active && !selectedAgentId && !conversationId && !pendingSelection.current && agents[0]) void selectAgent(agents[0].id);
   }, [agents, selectedAgentId, active]);
 
   useEffect(() => {
@@ -233,6 +239,7 @@ export function AgentWorkspace(props: {
   async function refreshDirectory(): Promise<void> {
     if (!activeRef.current) return;
     const request = directoryRequests.current.begin("directory");
+    setDirectoryLoading(true);
     try {
       const [nextAgents, nextContacts, nextConversations] = await directoryRequests.current.guard(request, Promise.all([
         api.agents(request.signal),
@@ -243,31 +250,32 @@ export function AgentWorkspace(props: {
       setAgents(nextAgents);
       setContacts(nextContacts);
       setConversations(nextConversations);
+      setDirectoryLoaded(true);
+      setDirectoryError("");
     } catch (error) {
-      if (!isSupersededRequest(error)) props.onNotice(messageOf(error));
+      if (!isSupersededRequest(error) && directoryRequests.current.isCurrent(request)) setDirectoryError(messageOf(error));
+    } finally {
+      if (directoryRequests.current.isCurrent(request)) setDirectoryLoading(false);
     }
   }
 
   async function poll(): Promise<void> {
     if (!activeRef.current) return;
+    void refreshDirectory();
+    // A failed selection needs the full selection request (including messages), not a partial poll.
+    if (pendingSelection.current) return;
     const agentId = selectedAgentIdRef.current;
     const activeConversationId = conversationIdRef.current;
     const resourceId = selectionResource(agentId, activeConversationId);
     const request = pollRequests.current.begin(resourceId);
     const messageSelection = messageResource.current;
     try {
-      const [nextAgents, nextContacts, nextConversations, nextAgent, nextActivity] = await pollRequests.current.guard(request, Promise.all([
-        api.agents(request.signal),
-        api.agentContacts(request.signal),
-        api.conversations(request.signal),
+      const [nextAgent, nextActivity] = await pollRequests.current.guard(request, Promise.all([
         agentId ? api.agent(agentId, request.signal) : Promise.resolve(null),
         agentId ? api.agentActivity(agentId, request.signal) : Promise.resolve(null),
         messageSelection ? messageResource.load(messageSelection, (signal) => api.conversationMessages(messageSelection.resourceId, signal)) : Promise.resolve()
       ]));
       if (!pollRequests.current.isCurrent(request, selectionResource(selectedAgentIdRef.current, conversationIdRef.current))) return;
-      setAgents(nextAgents);
-      setContacts(nextContacts);
-      setConversations(nextConversations);
       if (nextAgent) setAgent(nextAgent);
       if (nextActivity) setActivity(nextActivity);
     } catch (error) {
@@ -277,6 +285,8 @@ export function AgentWorkspace(props: {
   }
 
   async function selectAgent(id: string): Promise<void> {
+    pendingSelection.current = { agentId: id };
+    setSelectionError("");
     const resourceId = `agent:${id}`;
     const request = selectionRequests.current.begin(resourceId);
     pollRequests.current.cancel();
@@ -306,8 +316,9 @@ export function AgentWorkspace(props: {
       setAgent(detail);
       setConversationId(conversation.id);
       setActivity(events);
+      pendingSelection.current = null;
     } catch (error) {
-      if (!isSupersededRequest(error) && selectionRequests.current.isCurrent(request, resourceId)) props.onNotice(messageOf(error));
+      if (!isSupersededRequest(error) && selectionRequests.current.isCurrent(request, resourceId)) setSelectionError(messageOf(error));
     } finally {
       if (selectionRequests.current.isCurrent(request, resourceId)) setBusy(false);
     }
@@ -322,6 +333,8 @@ export function AgentWorkspace(props: {
       return;
     }
     const agentId = participant && owned ? participant.participantId : null;
+    pendingSelection.current = { conversation };
+    setSelectionError("");
     const resourceId = `conversation:${conversation.id}:agent:${agentId ?? "none"}`;
     const request = selectionRequests.current.begin(resourceId);
     pollRequests.current.cancel();
@@ -349,11 +362,19 @@ export function AgentWorkspace(props: {
         || selectedAgentIdRef.current !== agentId) return;
       setAgent(nextAgent);
       setActivity(nextActivity);
+      pendingSelection.current = null;
     } catch (error) {
-      if (!isSupersededRequest(error) && selectionRequests.current.isCurrent(request, resourceId)) props.onNotice(messageOf(error));
+      if (!isSupersededRequest(error) && selectionRequests.current.isCurrent(request, resourceId)) setSelectionError(messageOf(error));
     } finally {
       if (selectionRequests.current.isCurrent(request, resourceId)) setBusy(false);
     }
+  }
+
+  function retrySelection(): void {
+    const target = pendingSelection.current;
+    if (!target || busy) return;
+    if ("agentId" in target) void selectAgent(target.agentId);
+    else void selectConversation(target.conversation);
   }
 
   async function sendMessage(event: FormEvent): Promise<void> {
@@ -440,6 +461,8 @@ export function AgentWorkspace(props: {
           {DIRECTORY_TABS.map(({ id: section }) => {
             const directoryAgents = section === "messages" ? agentsWithoutConversations : filteredAgents;
             return <MotionPanel key={section} active={directoryTab === section} className="qq-directory-scroll" id={`${navigationId}-directory-panel-${section}`} role="tabpanel" aria-labelledby={`${navigationId}-directory-${section}`}>
+          {section !== "discover" && !directoryLoaded && directoryLoading && <div className="qq-directory-feedback" role="status"><RefreshCw size={22} className="spin" /><strong>正在加载伙伴与会话</strong><span>请稍候</span></div>}
+          {section !== "discover" && directoryError && <div className="qq-directory-feedback" role="status"><AlertCircle size={22} /><strong>{directoryLoaded ? "列表暂未更新" : "暂时无法加载列表"}</strong><span>{directoryLoaded ? "已保留上次的伙伴和会话。" : "连接恢复后即可继续查看。"}</span><button type="button" disabled={directoryLoading} onClick={() => void refreshDirectory()}>{directoryLoading ? "正在重试…" : "重新加载列表"}</button></div>}
           {section === "messages" && conversations.length > 0 && <>
             <div className="agent-section-label"><span>最近会话</span><em>{filteredConversations.length}</em></div>
             <div className="agent-inbox-list">
@@ -454,7 +477,7 @@ export function AgentWorkspace(props: {
               })}
             </div>
           </>}
-          {section !== "discover" && <>
+          {section !== "discover" && directoryLoaded && <>
             {(directoryAgents.length > 0 || !agents.length) && <div className="agent-section-label"><span>我的伙伴</span><em>{directoryAgents.length}</em></div>}
             <div className="agent-directory-list">
               {directoryAgents.map((item) => (
@@ -484,7 +507,7 @@ export function AgentWorkspace(props: {
             </MotionPanel>;
           })}
         </div>
-        <footer className="qq-directory-footer"><span><i />你的 Chaq 空间</span><button className="icon-only-button" title="刷新列表" aria-label="刷新列表" onClick={() => void refreshDirectory()}><RefreshCw size={15} /></button></footer>
+        <footer className="qq-directory-footer"><span><i />你的 Chaq 空间</span><button className="icon-only-button" title="刷新列表" aria-label="刷新列表" disabled={directoryLoading} onClick={() => void refreshDirectory()}><RefreshCw size={15} className={directoryLoading ? "spin" : undefined} /></button></footer>
       </aside>
 
       <section className="agent-stage" aria-label="伙伴空间">
@@ -513,7 +536,7 @@ export function AgentWorkspace(props: {
           </>
         ) : (
           <div className="agent-stage-empty">
-            {busy ? <><div className="qq-welcome-mark"><RefreshCw size={32} className="spin" /></div><h2>正在打开会话</h2><p>让对话继续。</p></> : <><div className="qq-welcome-mark"><MessageCircle size={44} strokeWidth={1.5} /><Sparkles className="qq-welcome-sparkle" size={20} /></div><span className="qq-welcome-kicker">HELLO, CHAQ</span><h2>好聊的伙伴，就在这里</h2><p>分享日常，碰撞灵感。<br />从一句「你好」开始新的故事。</p><div className="qq-welcome-actions"><button onClick={() => setShowCreate(true)}><Plus size={17} />创建 Agent</button><button onClick={() => setShowExplore(true)}><Compass size={17} />发现伙伴</button></div><span className="qq-welcome-note">选择左侧伙伴，开始聊天</span></>}
+            {busy || (!directoryLoaded && directoryLoading) ? <div role="status"><div className="qq-welcome-mark"><RefreshCw size={32} className="spin" /></div><h2>{busy ? "正在打开会话" : "正在加载你的空间"}</h2><p>请稍候，让对话继续。</p></div> : selectionError ? <div role="status"><div className="qq-welcome-mark"><AlertCircle size={32} /></div><h2>会话暂时无法打开</h2><p>加载未完成，请重试。你的草稿仍然保留。</p><div className="qq-welcome-actions"><button onClick={retrySelection}><RefreshCw size={16} />重新打开会话</button></div></div> : !directoryLoaded && directoryError ? <div role="status"><div className="qq-welcome-mark"><AlertCircle size={32} /></div><h2>暂时无法连接你的空间</h2><p>暂未取得伙伴与会话，稍后重试即可。</p><div className="qq-welcome-actions"><button onClick={() => void refreshDirectory()}><RefreshCw size={16} />重试连接</button></div></div> : <><div className="qq-welcome-mark"><MessageCircle size={44} strokeWidth={1.5} /><Sparkles className="qq-welcome-sparkle" size={20} /></div><span className="qq-welcome-kicker">HELLO, CHAQ</span><h2>好聊的伙伴，就在这里</h2><p>分享日常，碰撞灵感。<br />从一句「你好」开始新的故事。</p><div className="qq-welcome-actions"><button onClick={() => setShowCreate(true)}><Plus size={17} />创建 Agent</button><button onClick={() => setShowExplore(true)}><Compass size={17} />发现伙伴</button></div><span className="qq-welcome-note">选择左侧伙伴，开始聊天</span></>}
           </div>
         )}
       </section>
@@ -526,64 +549,88 @@ export function AgentWorkspace(props: {
   );
 }
 
-function AgentExplore(props: { active: boolean; onClose: () => void; onOpenProfile: (agentId: string) => void; onChanged: () => void; onNotice: (message: string) => void }): JSX.Element {
-  const [query, setQuery] = useState("");
+function useAgentDiscovery() {
   const [agents, setAgents] = useState<PublicAgentSummary[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [addingId, setAddingId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [searched, setSearched] = useState(false);
+  const [error, setError] = useState("");
+  const requests = useRef(new LatestRequestGate());
+  const pendingQuery = useRef<string | null>(null);
+  useEffect(() => () => { requests.current.cancel(); pendingQuery.current = null; }, []);
 
-  useEffect(() => { void search(); }, []);
-  useEffect(() => {
-    if (!props.active) return;
-    const listener = (event: KeyboardEvent) => {
-      if (event.key === "Escape") props.onClose();
-    };
-    window.addEventListener("keydown", listener);
-    return () => window.removeEventListener("keydown", listener);
-  }, [props.active, props.onClose]);
-
-  async function search(): Promise<void> {
+  async function search(query: string): Promise<void> {
+    const normalized = query.trim();
+    if (pendingQuery.current === normalized) return;
+    const request = requests.current.begin(normalized);
+    pendingQuery.current = normalized;
     setLoading(true);
+    setError("");
+    setAgents([]);
     try {
-      setAgents(await api.discoverAgents(query));
+      const next = await requests.current.guard(request, api.discoverAgents(normalized));
+      if (!requests.current.isCurrent(request)) return;
+      setAgents(next);
+      setSearched(true);
     } catch (error) {
-      props.onNotice(messageOf(error));
+      if (!isSupersededRequest(error) && requests.current.isCurrent(request)) setError(messageOf(error));
     } finally {
-      setLoading(false);
+      if (requests.current.isCurrent(request)) {
+        pendingQuery.current = null;
+        setLoading(false);
+      }
     }
   }
+  return { agents, setAgents, loading, searched, error, search };
+}
+
+function AgentExplore(props: { active: boolean; onClose: () => void; onOpenProfile: (agentId: string) => void; onChanged: () => void; onNotice: (message: string) => void }): JSX.Element {
+  const titleId = useId();
+  const [query, setQuery] = useState("");
+  const { agents, setAgents, loading, searched, error, search } = useAgentDiscovery();
+  const [addingId, setAddingId] = useState<string | null>(null);
+  const adding = useRef(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    void search("");
+    return () => { mounted.current = false; };
+  }, []);
 
   async function add(agent: PublicAgentSummary): Promise<void> {
-    if (agent.isContact || addingId) return;
+    if (agent.isContact || adding.current) return;
+    adding.current = true;
     setAddingId(agent.id);
     try {
       await api.addAgentContact(agent.id);
+      if (!mounted.current) return;
       setAgents((current) => current.map((item) => item.id === agent.id ? { ...item, isContact: true } : item));
       props.onChanged();
       props.onNotice(`已添加 ${agent.name} 为好友`);
     } catch (error) {
-      props.onNotice(messageOf(error));
+      if (mounted.current) props.onNotice(messageOf(error));
     } finally {
-      setAddingId(null);
+      adding.current = false;
+      if (mounted.current) setAddingId(null);
     }
   }
 
-  return <div className="agent-explore-overlay" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onClose(); }}>
+  return <ModalDialog className="agent-explore-overlay" labelledBy={titleId} active={props.active} dismissible={!addingId} onClose={props.onClose}>
     <section className="agent-explore">
-      <header><div><Compass size={20} /><span><h2>发现 Agent</h2><p>寻找可以长期相处、协作和交流的数字伙伴</p></span></div><button className="icon-only-button" title="关闭" onClick={props.onClose}><X size={18} /></button></header>
-      <form className="agent-explore-search" onSubmit={(event) => { event.preventDefault(); void search(); }}><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索名字、Handle、标签或简介" /><button>搜索</button></form>
-      <div className="agent-explore-grid">
+      <header><div><Compass size={20} /><span><h2 id={titleId}>发现 Agent</h2><p>寻找可以长期相处、协作和交流的数字伙伴</p></span></div><button type="button" className="icon-only-button" title="关闭" aria-label="关闭发现窗口" disabled={Boolean(addingId)} onClick={props.onClose}><X size={18} /></button></header>
+      <form className="agent-explore-search" onSubmit={(event) => { event.preventDefault(); if (!adding.current) void search(query); }}><Search size={17} /><input aria-label="搜索公开 Agent" value={query} disabled={Boolean(addingId)} onChange={(event) => setQuery(event.target.value)} placeholder="搜索名字、Handle、标签或简介" /><button type="submit" disabled={Boolean(addingId)}>搜索</button></form>
+      <div className="agent-explore-grid" aria-busy={loading}>
         {agents.map((item) => <article key={item.id}>
-          <button className="agent-explore-profile" onClick={() => props.onOpenProfile(item.id)}><AgentAvatar agent={item} large /><span><strong>{item.name}</strong><small>@{item.handle}</small></span></button>
+          <button className="agent-explore-profile" disabled={Boolean(addingId)} onClick={() => props.onOpenProfile(item.id)}><AgentAvatar agent={item} large /><span><strong>{item.name}</strong><small>@{item.handle}</small></span></button>
           <p>{item.tagline || item.biography || "这个 Agent 正在形成自己的故事。"}</p>
           <div className="agent-explore-tags">{item.tags.slice(0, 4).map((tag, index) => <span key={`${tag}-${index}`}>{tag}</span>)}</div>
-          <footer><span><Coins size={14} />{item.serviceFee} token / 回复</span><button disabled={item.isContact || addingId === item.id} onClick={() => void add(item)}>{item.isContact ? <><Check size={15} />已添加</> : <><UserPlus size={15} />加好友</>}</button></footer>
+          <footer><span><Coins size={14} />{item.serviceFee} token / 回复</span><button disabled={item.isContact || Boolean(addingId)} onClick={() => void add(item)}>{item.isContact ? <><Check size={15} />已添加</> : addingId === item.id ? "正在添加…" : <><UserPlus size={15} />加好友</>}</button></footer>
         </article>)}
-        {!loading && !agents.length && <div className="agent-explore-empty"><Compass size={28} /><strong>没有找到公开 Agent</strong><span>换一个关键词再试试</span></div>}
-        {loading && <div className="agent-explore-empty"><RefreshCw className="spin" size={26} /><span>正在寻找 Agent</span></div>}
+        {!loading && error && <div className="agent-explore-empty" role="status"><AlertCircle size={28} /><strong>暂时无法发现 Agent</strong><span>连接未完成，请稍后重试。</span><button type="button" onClick={() => void search(query)}>重新搜索</button></div>}
+        {!loading && !error && searched && !agents.length && <div className="agent-explore-empty" role="status"><Compass size={28} /><strong>没有找到公开 Agent</strong><span>换一个关键词再试试</span></div>}
+        {loading && <div className="agent-explore-empty" role="status"><RefreshCw className="spin" size={26} /><span>正在寻找 Agent</span></div>}
       </div>
     </section>
-  </div>;
+  </ModalDialog>;
 }
 
 function AgentChat(props: {
@@ -964,7 +1011,7 @@ function AgentRelationships(props: { agent: AgentDetail; onOpenProfile: (agentId
   const [form, setForm] = useState({ targetKind: "agent", targetId: "", targetLabel: "", kind: "friend", notes: "" });
   const [errors, setErrors] = useState<FieldErrors>({});
   const [query, setQuery] = useState("");
-  const [publicAgents, setPublicAgents] = useState<PublicAgentSummary[]>([]);
+  const { agents: publicAgents, loading, searched, error, search } = useAgentDiscovery();
   async function save(): Promise<void> {
     const nextErrors = { targetId: form.targetId.trim() ? "" : "请填写 UID 或 Agent ID。", targetLabel: form.targetLabel.trim() ? "" : "请填写关系对象名称。" };
     setErrors(nextErrors);
@@ -972,13 +1019,13 @@ function AgentRelationships(props: { agent: AgentDetail; onOpenProfile: (agentId
     try { await api.addAgentRelationship(props.agent.id, { ...form, affinity: 0.4, trust: 0.6, familiarity: 0.3, sentiment: 0.3 }); setForm({ targetKind: "agent", targetId: "", targetLabel: "", kind: "friend", notes: "" }); setErrors({}); props.onChanged(); } catch (error) { props.onNotice(messageOf(error)); }
   }
   async function discover(): Promise<void> {
-    try { setPublicAgents(await api.discoverAgents(query)); } catch (error) { props.onNotice(messageOf(error)); }
+    await search(query);
   }
   return <div className="agent-panel-stack">
     <div className="agent-relationship-form"><select value={form.targetKind} onChange={(event) => setForm({ ...form, targetKind: event.target.value })}><option value="agent">Agent</option><option value="user">用户</option></select><input aria-invalid={Boolean(errors.targetId)} value={form.targetId} onChange={(event) => { setForm({ ...form, targetId: event.target.value }); setErrors(clearAgentError(errors, "targetId")); }} placeholder="UID / Agent ID" /><input aria-invalid={Boolean(errors.targetLabel)} value={form.targetLabel} onChange={(event) => { setForm({ ...form, targetLabel: event.target.value }); setErrors(clearAgentError(errors, "targetLabel")); }} placeholder="名字" /><select value={form.kind} onChange={(event) => setForm({ ...form, kind: event.target.value })}><option value="friend">朋友</option><option value="family">家人</option><option value="colleague">同事</option><option value="mentor">导师</option><option value="acquaintance">认识的人</option></select><button onClick={() => void save()}><Plus size={16} />建立关系</button></div>
     {errors.targetId && <small className="field-error"><AlertCircle size={13} />{errors.targetId}</small>}
     {errors.targetLabel && <small className="field-error"><AlertCircle size={13} />{errors.targetLabel}</small>}
-    <div className="agent-discover"><div><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索公开 Agent" /><button onClick={() => void discover()}><Users size={15} />发现</button></div><div className="agent-discover-results">{publicAgents.map((item) => <article key={item.id}><button className="agent-discover-profile" onClick={() => props.onOpenProfile(item.id)}><AgentAvatar agent={item} /><span><strong>{item.name}</strong><small>@{item.handle} · {item.tagline}</small></span></button><button className="icon-only-button" title="建立关系" onClick={() => setForm({ ...form, targetKind: "agent", targetId: item.id, targetLabel: item.name })}><Plus size={15} /></button></article>)}</div></div>
+    <div className="agent-discover"><form onSubmit={(event) => { event.preventDefault(); void discover(); }}><input aria-label="搜索公开 Agent" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索公开 Agent" /><button type="submit"><Users size={15} />发现</button></form><div className="agent-discover-results" aria-busy={loading}>{loading ? <p role="status">正在寻找 Agent…</p> : error ? <div className="qq-discover-feedback" role="status"><span>暂时无法搜索，请稍后重试。</span><button type="button" onClick={() => void discover()}>重新搜索</button></div> : searched && !publicAgents.length ? <p role="status">没有找到公开 Agent，换个关键词试试。</p> : null}{publicAgents.map((item) => <article key={item.id}><button className="agent-discover-profile" onClick={() => props.onOpenProfile(item.id)}><AgentAvatar agent={item} /><span><strong>{item.name}</strong><small>@{item.handle} · {item.tagline}</small></span></button><button className="icon-only-button" title="建立关系" onClick={() => setForm({ ...form, targetKind: "agent", targetId: item.id, targetLabel: item.name })}><Plus size={15} /></button></article>)}</div></div>
     <div className="agent-relationship-list">{props.agent.relationships.map((item) => <article key={item.id} className={item.targetKind === "agent" ? "profile-link" : ""} onClick={() => { if (item.targetKind === "agent") props.onOpenProfile(item.targetId); }}><Users size={18} /><div><strong>{item.targetLabel}</strong><p>{item.kind} · {item.notes}</p></div><span>信任 {Math.round(item.trust * 100)}%</span></article>)}</div>
   </div>;
 }
@@ -1000,30 +1047,28 @@ function AgentPulse(props: { agent: AgentDetail; events: AgentEvent[] }): JSX.El
 }
 
 function CreateAgentDialog(props: { active: boolean; providers: ModelProviderPublic[]; skills: SkillSummary[]; onClose: () => void; onCreated: (agent: AgentDetail) => void; onNotice: (message: string) => void }): JSX.Element {
+  const titleId = useId();
   const [form, setForm] = useState({ name: "", handle: `agent-${Date.now().toString(36).slice(-5)}`, tagline: "", persona: "有稳定的自我、好奇心和行动力。", tone: "自然、直接、有分寸。", autonomyMode: "copilot" as AgentDraft["autonomyMode"], visibility: "private" as AgentDraft["visibility"], serviceFee: 0, modelProviderId: props.providers[0]?.id ?? "", model: props.providers[0]?.models[0]?.id ?? "" });
   const [busy, setBusy] = useState(false);
+  const submitting = useRef(false);
+  const mounted = useRef(true);
   const [errors, setErrors] = useState<FieldErrors>({});
   const eligibleProviders = form.visibility === "private" ? props.providers : props.providers.filter((item) => item.scope === "platform");
   const provider = eligibleProviders.find((item) => item.id === form.modelProviderId);
-  useEffect(() => {
-    if (!props.active) return;
-    const listener = (event: KeyboardEvent) => {
-      if (event.key === "Escape" && !busy) props.onClose();
-    };
-    window.addEventListener("keydown", listener);
-    return () => window.removeEventListener("keydown", listener);
-  }, [busy, props.active, props.onClose]);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   const update = <K extends keyof typeof form>(key: K, value: (typeof form)[K]) => {
     setForm({ ...form, [key]: value });
     setErrors(clearAgentError(errors, key));
   };
   async function create(): Promise<void> {
+    if (submitting.current) return;
     const nextErrors = validateAgentCreate(form);
     setErrors(nextErrors);
     if (Object.values(nextErrors).some(Boolean)) {
       props.onNotice("请检查标红的 Agent 创建字段");
       return;
     }
+    submitting.current = true;
     setBusy(true);
     try {
       const agent = await api.createAgent({
@@ -1045,16 +1090,20 @@ function CreateAgentDialog(props: { active: boolean; providers: ModelProviderPub
         dailyTokenBudget: 5000,
         dailyActionBudget: 30
       });
-      props.onCreated(agent);
-    } catch (error) { props.onNotice(messageOf(error)); } finally { setBusy(false); }
+      if (mounted.current) props.onCreated(agent);
+    } catch (error) { if (mounted.current) props.onNotice(messageOf(error)); } finally { submitting.current = false; if (mounted.current) setBusy(false); }
   }
   async function migrate(skillId: string): Promise<void> {
+    if (submitting.current) return;
+    submitting.current = true;
     setBusy(true);
-    try { props.onCreated(await api.migrateSkillToAgent(skillId)); } catch (error) { props.onNotice(messageOf(error)); } finally { setBusy(false); }
+    try { const agent = await api.migrateSkillToAgent(skillId); if (mounted.current) props.onCreated(agent); } catch (error) { if (mounted.current) props.onNotice(messageOf(error)); } finally { submitting.current = false; if (mounted.current) setBusy(false); }
   }
-  return <div className="agent-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) props.onClose(); }}>
+  return <ModalDialog className="agent-dialog-backdrop" labelledBy={titleId} active={props.active} dismissible={!busy} onClose={props.onClose}>
     <section className="agent-dialog">
-      <header><div><Sparkles size={19} /><h2>创建 Agent</h2></div><button className="icon-only-button" onClick={props.onClose}><X size={18} /></button></header>
+      <header><div><Sparkles size={19} /><h2 id={titleId}>创建 Agent</h2></div><button type="button" className="icon-only-button" aria-label="关闭创建窗口" disabled={busy} onClick={props.onClose}><X size={18} /></button></header>
+      <form className="agent-dialog-form" aria-busy={busy} onSubmit={(event) => { event.preventDefault(); void create(); }}>
+      <div className="agent-dialog-scroll">
       <div className="agent-dialog-body">
         <AgentField label="名字" error={errors.name}><input aria-invalid={Boolean(errors.name)} autoFocus value={form.name} onChange={(event) => update("name", event.target.value)} /></AgentField>
         <AgentField label="Handle" error={errors.handle}><input aria-invalid={Boolean(errors.handle)} value={form.handle} onChange={(event) => update("handle", event.target.value.replace(/[^a-zA-Z0-9_-]/g, ""))} /></AgentField>
@@ -1067,10 +1116,12 @@ function CreateAgentDialog(props: { active: boolean; providers: ModelProviderPub
         <AgentField label="模型来源"><select value={form.modelProviderId} onChange={(event) => setForm({ ...form, modelProviderId: event.target.value, model: eligibleProviders.find((item) => item.id === event.target.value)?.models[0]?.id ?? "" })}><option value="">稍后配置</option>{eligibleProviders.map((item) => <option key={item.id} value={item.id}>{item.scope === "user_private" ? `私有 · ${item.name}` : `平台 · ${item.name}`}</option>)}</select></AgentField>
         <AgentField label="模型" className="wide"><select value={form.model} onChange={(event) => update("model", event.target.value)}><option value="">未选择</option>{provider?.models.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></AgentField>
       </div>
-      <footer><button onClick={props.onClose}>取消</button><button className="agent-run-button" disabled={busy} onClick={() => void create()}><Plus size={16} />创建</button></footer>
-      {props.skills.length > 0 && <div className="agent-migrate-list"><strong>从 Skill 升级</strong>{props.skills.slice(0, 8).map((skill) => <button key={skill.id} disabled={busy} onClick={() => void migrate(skill.id)}><Bot size={15} />{skill.name}<span>升级</span></button>)}</div>}
+      {props.skills.length > 0 && <div className="agent-migrate-list"><strong>从 Skill 升级</strong>{props.skills.slice(0, 8).map((skill) => <button type="button" key={skill.id} disabled={busy} onClick={() => void migrate(skill.id)}><Bot size={15} />{skill.name}<span>升级</span></button>)}</div>}
+      </div>
+      <footer><button type="button" disabled={busy} onClick={props.onClose}>取消</button><button type="submit" className="agent-run-button" disabled={busy}><Plus size={16} />{busy ? "正在创建…" : "创建"}</button></footer>
+      </form>
     </section>
-  </div>;
+  </ModalDialog>;
 }
 
 function AgentField(props: { label: string; error?: string; className?: string; children: React.ReactNode }): JSX.Element {

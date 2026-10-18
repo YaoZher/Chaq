@@ -164,6 +164,17 @@
 .qq-workspace .qq-emoji-picker button { width: 34px; height: 34px; font-size: 22px; }
 
 .qq-workspace .agent-stage-empty { gap: 0; padding: 40px 24px; color: var(--muted); text-align: center; background: radial-gradient(ellipse at 50% 43%, var(--panel), transparent 63%); }
+.qq-workspace .agent-stage-empty > [role="status"] { display: flex; flex-direction: column; align-items: center; }
+.qq-workspace .qq-directory-feedback { display: flex; flex-direction: column; align-items: center; gap: 9px; margin: 16px 4px; padding: 20px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel-soft); color: var(--muted); text-align: center; }
+.qq-workspace .qq-directory-feedback > svg { color: var(--accent); }
+.qq-workspace .qq-directory-feedback strong { color: var(--text); font-size: 12px; }
+.qq-workspace .qq-directory-feedback span { font-size: 11px; line-height: 1.6; }
+.qq-workspace .qq-directory-feedback button,
+.agent-explore-empty > button,
+.qq-workspace .qq-discover-feedback button { min-height: 30px; padding: 0 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--accent); font-size: 11px; }
+.qq-workspace .agent-discover > form { display: flex; align-items: center; gap: 8px; }
+.qq-workspace .agent-discover > form input { flex: 1; min-width: 0; }
+.qq-workspace .qq-discover-feedback { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 12px; }
 .qq-workspace .qq-welcome-mark { position: relative; display: grid; place-items: center; width: 104px; height: 104px; margin-bottom: 27px; border-radius: 32px; border: 1px solid color-mix(in srgb, var(--accent) 12%, var(--panel)); background: linear-gradient(145deg, var(--panel), var(--accent-soft)); box-shadow: 0 12px 34px color-mix(in srgb, var(--accent) 8%, transparent), inset 0 1px 0 var(--panel); transform: rotate(-6deg); }
 .qq-workspace .qq-welcome-mark > svg { color: var(--accent); transform: rotate(6deg); }
 .qq-workspace .qq-welcome-mark .qq-welcome-sparkle { position: absolute; right: -9px; top: 4px; width: 31px; height: 31px; padding: 5px; border-radius: 10px; background: var(--panel); color: #ffb94f; box-shadow: 0 3px 13px rgb(50 80 120 / 8%); transform: rotate(14deg); }

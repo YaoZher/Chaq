@@ -1,6 +1,6 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import type { AgentContact, AgentDetail, ConversationMessage, ConversationSummary } from "@chaq/shared";
+import type { AgentContact, AgentDetail, ConversationMessage, ConversationSummary, PublicAgentSummary } from "@chaq/shared";
 import { AgentWorkspace } from "../src/renderer/components/agent-workspace";
 import { api, type LoginUser } from "../src/renderer/lib/api";
 
@@ -54,6 +54,11 @@ function fixture() {
   const imports: Array<{ agentId: string; payload: unknown }> = [];
   const pending = deferred<Awaited<ReturnType<typeof api.addAgentKnowledge>>>();
   const pendingSend = deferred<ConversationMessage>();
+  const pendingCreate = deferred<AgentDetail>();
+  const creations: unknown[] = [];
+  const discoveries: Array<{ query: string; request: ReturnType<typeof deferred<PublicAgentSummary[]>> }> = [];
+  let directoryFails = false;
+  let failingAgentId: string | null = null;
   const sends: string[] = [];
   const readReceipts: string[] = [];
   const directoryReads: number[] = [];
@@ -65,12 +70,14 @@ function fixture() {
   const mocks = {
     agents: async () => {
       directoryReads.push(Date.now());
+      if (directoryFails) throw new Error("Directory unavailable");
       return [...agents.values()].map((agent) => structuredClone(agent));
     },
     agentContacts: async () => structuredClone(directoryContacts),
     conversations: async () => structuredClone(directoryConversations),
     agent: async (id: string) => {
       reads.push(id);
+      if (failingAgentId === id) throw new Error("Agent unavailable");
       const agent = agents.get(id);
       check(agent, `unexpected agent ${id}`);
       return structuredClone(agent);
@@ -92,6 +99,15 @@ function fixture() {
     addAgentKnowledge: async (agentId: string, payload: unknown) => {
       imports.push({ agentId, payload });
       return pending.promise;
+    },
+    discoverAgents: async (query = "") => {
+      const request = deferred<PublicAgentSummary[]>();
+      discoveries.push({ query, request });
+      return request.promise;
+    },
+    createAgent: async (draft: Parameters<typeof api.createAgent>[0]) => {
+      creations.push(draft);
+      return pendingCreate.promise;
     }
   } satisfies Partial<typeof api>;
   const originals = Object.fromEntries(Object.keys(mocks).map((key) => [key, api[key as keyof typeof mocks]]));
@@ -144,7 +160,10 @@ function fixture() {
   }
 
   return {
-    container, reads, notices, imports, field, fill, click, query, queryAll, sends, readReceipts, directoryReads, directoryConversations, directoryContacts, conversationMessages,
+    container, reads, notices, imports, field, fill, click, query, queryAll, sends, readReceipts, directoryReads, directoryConversations, directoryContacts, conversationMessages, discoveries, creations,
+    failDirectory: (failed: boolean) => { directoryFails = failed; },
+    failAgent: (id: string | null) => { failingAgentId = id; },
+    failCreate: async () => { await act(async () => { pendingCreate.reject(new Error("Creation interrupted")); }); },
     selected: () => query(".agent-directory-row.active strong")?.textContent,
     pollTimerCount: () => pollTimers.size,
     tickPoll: async () => {
@@ -159,9 +178,10 @@ function fixture() {
     finishSend: async () => {
       await act(async () => { pendingSend.resolve({ id: "sent-message", conversationId: "conversation-agent-a", authorKind: "user", authorId: user.id, kind: "text", content: "Pending message", status: "delivered", createdAt: timestamp }); });
     },
-    mount: async () => {
+    mount: async (ready = true) => {
       await act(async () => { root.render(<AgentWorkspace user={user} providers={[]} skills={[]} onNotice={(message) => notices.push(message)} />); });
       mounted = true;
+      if (!ready) return;
       await waitFor(() => container.querySelector(".agent-stage h2")?.textContent === "Agent A", "initial agent must load");
       await click("[role=tab]", "记忆");
     },
@@ -207,7 +227,111 @@ function fixture() {
 }
 
 type Fixture = ReturnType<typeof fixture>;
-const cases: Array<{ name: string; run(test: Fixture): Promise<void> }> = [
+const cases: Array<{ name: string; setup?(test: Fixture): void; waitUntilReady?: boolean; run(test: Fixture): Promise<void> }> = [
+  {
+    name: "initial directory failures show recovery instead of pretending the account has no partners",
+    setup(test) { test.failDirectory(true); },
+    waitUntilReady: false,
+    async run(test) {
+      await waitFor(() => Boolean(test.query(".qq-directory-feedback")?.textContent?.includes("暂时无法加载列表")), "initial failure must show a retry state");
+      check(!test.query(".qq-directory-empty") && !test.query(".qq-welcome-kicker"), "failed fetch must not show a new account welcome or an empty directory");
+      check(test.query(".agent-stage h2")?.textContent === "暂时无法连接你的空间", "stage must explain the connection failure");
+      test.failDirectory(false);
+      await test.click(".qq-directory-feedback button", "重新加载列表");
+      await waitFor(() => test.query(".agent-stage h2")?.textContent === "Agent A", "retry must load the directory and selected partner");
+      check(!test.query(".qq-directory-feedback"), "successful retry must clear the error");
+    }
+  },
+  {
+    name: "background directory failures retain cached partners and editor drafts until retry succeeds",
+    async run(test) {
+      await test.fill("长期记忆", "Keep during outage");
+      const field = test.field("长期记忆");
+      test.failDirectory(true);
+      await test.tickPoll();
+      await waitFor(() => Boolean(test.query(".qq-directory-feedback")), "background failure must remain recoverable in the directory");
+      check(test.queryAll(".agent-directory-row").length === 2, "cached partners must remain available");
+      check(test.field("长期记忆") === field && field.value === "Keep during outage", "failed background refresh must preserve the editor");
+      test.failDirectory(false);
+      await test.click(".qq-directory-feedback button", "重新加载列表");
+      await waitFor(() => !test.query(".qq-directory-feedback"), "retry success must clear the error banner");
+      check(test.field("长期记忆") === field, "retry must not replace the current pane");
+    }
+  },
+  {
+    name: "a failed partner selection offers a full retry and recovers its own draft",
+    async run(test) {
+      await test.click(".agent-tabs [role=tab]", "会话");
+      await test.selectB();
+      await test.fill("发消息给 Agent B", "Draft before outage");
+      const agentA = test.queryAll<HTMLButtonElement>(".agent-directory-row").find((item) => item.querySelector("strong")?.textContent === "Agent A")!;
+      await act(async () => { agentA.click(); });
+      await waitFor(() => test.query(".agent-stage h2")?.textContent === "Agent A", "must return to Agent A");
+      test.failAgent("agent-b");
+      const agentB = test.queryAll<HTMLButtonElement>(".agent-directory-row").find((item) => item.querySelector("strong")?.textContent === "Agent B")!;
+      await act(async () => { agentB.click(); });
+      await waitFor(() => test.query(".agent-stage h2")?.textContent === "会话暂时无法打开", "failed selection must show an explicit error");
+      await test.tickPoll();
+      check(test.query(".agent-stage h2")?.textContent === "会话暂时无法打开", "background polling must not turn a failed selection into a false empty chat");
+      test.failAgent(null);
+      await test.click(".qq-welcome-actions button", "重新打开会话");
+      await waitFor(() => test.query(".agent-stage h2")?.textContent === "Agent B", "full selection retry must recover Agent B");
+      check(test.field("发消息给 Agent B").value === "Draft before outage", "retry must preserve the selected partner's draft");
+    }
+  },
+  {
+    name: "discovery retries failures, ignores older search completions and cannot reopen after dismissal",
+    async run(test) {
+      await test.click(".qq-directory-tabs button", "发现");
+      await test.click(".qq-discovery-card > button", "发现公开 Agent");
+      check(test.discoveries.length === 1, "opening discovery must request the initial list once");
+      await act(async () => { test.discoveries[0].request.reject(new Error("Search unavailable")); });
+      check(test.query(".agent-explore-empty")?.textContent?.includes("暂时无法发现 Agent"), "network failure must differ from no search results");
+      await test.click(".agent-explore-empty button", "重新搜索");
+      await act(async () => { test.discoveries[1].request.resolve([]); });
+      check(test.query(".agent-explore-empty")?.textContent?.includes("没有找到公开 Agent"), "successful empty search must show the empty result state");
+      await test.fill("搜索名字、Handle、标签或简介", "older");
+      await test.click(".agent-explore-search button", "搜索");
+      await test.click(".agent-explore-search button", "搜索");
+      check(Number(test.discoveries.length) === 3, "duplicate pending searches for the same query must be ignored");
+      await test.fill("搜索名字、Handle、标签或简介", "newer");
+      await test.click(".agent-explore-search button", "搜索");
+      const publicAgent = (id: string): PublicAgentSummary => ({ ...agentFixture(id), name: id, profileStatus: "", mood: "" });
+      await act(async () => { test.discoveries[3].request.resolve([publicAgent("Newest result")]); });
+      await act(async () => { test.discoveries[2].request.resolve([publicAgent("Obsolete result")]); });
+      check(test.query(".agent-explore-profile strong")?.textContent === "Newest result", "late older results must not overwrite the latest search");
+      await test.fill("搜索名字、Handle、标签或简介", "dismissed");
+      await test.click(".agent-explore-search button", "搜索");
+      await test.click('[aria-label="关闭发现窗口"]', "");
+      const notices = test.notices.length;
+      await act(async () => { test.discoveries[4].request.reject(new Error("Late search failure")); });
+      check(!test.query(".agent-explore") && test.notices.length === notices, "closed discovery must ignore late responses and notices");
+    }
+  },
+  {
+    name: "create form submits once and blocks dismissal while pending, then keeps the draft after failure",
+    async run(test) {
+      await test.click('[aria-label="创建 Agent"]', "");
+      const dialog = test.query<HTMLDialogElement>("dialog.agent-dialog-backdrop")!;
+      const name = test.query<HTMLInputElement>(".agent-dialog-body input")!;
+      const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      await act(async () => { setValue.call(name, "My new partner"); name.dispatchEvent(new Event("input", { bubbles: true })); });
+      const form = test.query<HTMLFormElement>(".agent-dialog-form")!;
+      await act(async () => { form.requestSubmit(); form.requestSubmit(); });
+      check(test.creations.length === 1, "repeated form submits must create only one partner");
+      check(test.query<HTMLButtonElement>('[aria-label="关闭创建窗口"]')?.disabled, "close button must be disabled while creating");
+      await act(async () => {
+        dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
+        dialog.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 1, button: 0 }));
+        dialog.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, pointerId: 1, button: 0 }));
+      });
+      check(dialog.open, "Escape and backdrop must not dismiss an in-flight creation");
+      await test.failCreate();
+      check(name.value === "My new partner" && dialog.open, "creation failure must preserve the entered name");
+      check(!test.query<HTMLButtonElement>('[aria-label="关闭创建窗口"]')?.disabled, "failure must restore dismissal");
+      await test.click('[aria-label="关闭创建窗口"]', "");
+    }
+  },
   {
     name: "switching companion tabs preserves draft fields, validation and scroll position",
     async run(test) {
@@ -436,7 +560,7 @@ const cases: Array<{ name: string; run(test: Fixture): Promise<void> }> = [
       await test.click('[aria-label="查看聊天详情"]', "");
       await test.click('[aria-label="创建 Agent"]', "");
       check(test.query(".agent-dialog"), "create dialog must open above chat details");
-      await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); });
+      await act(async () => { test.query<HTMLDialogElement>("dialog.agent-dialog-backdrop")!.dispatchEvent(new Event("cancel", { cancelable: true })); });
       check(!test.query(".agent-dialog"), "Escape must dismiss the foreground dialog");
       check(test.query(".qq-chat-details"), "dismissing a dialog must preserve chat details behind it");
       await act(async () => { window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); });
@@ -502,7 +626,8 @@ export async function runWorkspaceLifecycleCases(): Promise<Result[]> {
   for (const entry of cases) {
     const test = fixture();
     try {
-      await test.mount();
+      entry.setup?.(test);
+      await test.mount(entry.waitUntilReady !== false);
       await entry.run(test);
       results.push({ name: entry.name, passed: true });
     } catch (error) {

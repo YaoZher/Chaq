@@ -2701,7 +2701,10 @@ a { color: var(--accent); }
 .agent-dialog {
   width: min(720px, 90vw);
   max-height: calc(100vh - 100px);
-  overflow: auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 16px;
   background: var(--panel);
@@ -2710,11 +2713,12 @@ a { color: var(--accent); }
 }
 
 .agent-dialog > header,
-.agent-dialog > footer {
+.agent-dialog-form > footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 13px 16px;
+  flex-shrink: 0;
   border-bottom: 1px solid var(--agent-line);
 }
 
@@ -2724,11 +2728,17 @@ a { color: var(--accent); }
   gap: 8px;
 }
 
-.agent-dialog > footer {
+.agent-dialog-form > footer {
   justify-content: flex-end;
+  gap: 10px;
   border-top: 1px solid var(--agent-line);
   border-bottom: 0;
+  background: var(--panel);
 }
+
+.agent-dialog-form { display: flex; flex-direction: column; min-height: 0; }
+.agent-dialog-scroll { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.agent-dialog-body input, .agent-dialog-body select, .agent-dialog-body textarea { min-width: 0; }
 
 .agent-dialog-body {
   display: grid;
@@ -2739,6 +2749,11 @@ a { color: var(--accent); }
 
 .agent-dialog-body .wide {
   grid-column: 1 / -1;
+}
+
+@media (max-width: 560px) {
+  .agent-dialog { width: 100%; max-height: calc(100dvh - 76px); }
+  .agent-dialog-body { grid-template-columns: minmax(0, 1fr); }
 }
 
 .agent-migrate-list {
