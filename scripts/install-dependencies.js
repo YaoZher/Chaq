@@ -1,66 +1,70 @@
 const { mkdirSync } = require("node:fs");
 const { spawnSync } = require("node:child_process");
-const { electronCache, npmCache, projectRoot } = require("./env-paths");
+const environmentPaths = require("./env-paths");
 const { recordDependencyState } = require("./dependency-state");
+const { runProjectNpm } = require("./project-npm");
 
-const serverOnly = process.argv.includes("--server-only");
-const cleanInstall = process.argv.includes("--ci");
-const args = [cleanInstall ? "ci" : "install"];
+function main(argv = process.argv.slice(2), {
+  paths = environmentPaths,
+  environment = process.env,
+  spawn = spawnSync,
+  recordState = recordDependencyState,
+  log = console.log
+} = {}) {
+  const { electronCache, npmCache, projectRoot } = paths;
+  const serverOnly = argv.includes("--server-only");
+  const cleanInstall = argv.includes("--ci");
+  const args = [cleanInstall ? "ci" : "install"];
 
-if (serverOnly) {
-  args.push(
-    "--workspace", "@chaq/server",
-    "--workspace", "@chaq/shared",
-    "--include-workspace-root"
-  );
-}
+  if (serverOnly) {
+    args.push(
+      "--workspace", "@chaq/server",
+      "--workspace", "@chaq/shared",
+      "--include-workspace-root"
+    );
+  }
 
-mkdirSync(electronCache, { recursive: true });
-mkdirSync(npmCache, { recursive: true });
+  mkdirSync(electronCache, { recursive: true });
+  mkdirSync(npmCache, { recursive: true });
 
-const mirror = process.env.ELECTRON_MIRROR || "https://npmmirror.com/mirrors/electron/";
-const command = process.platform === "win32"
-  ? (process.env.ComSpec || "cmd.exe")
-  : "npm";
-const commandArgs = process.platform === "win32"
-  ? ["/d", "/s", "/c", ["npm.cmd", ...args].map(quoteCommandArgument).join(" ")]
-  : args;
-const result = spawnSync(command, commandArgs, {
-  cwd: projectRoot,
-  env: {
-    ...process.env,
+  const installEnvironment = {
+    ...environment,
     npm_config_cache: npmCache,
     electron_config_cache: electronCache,
-    ELECTRON_MIRROR: mirror
-  },
-  stdio: "inherit",
-  windowsHide: true
-});
-
-if (result.error) throw result.error;
-if (result.status !== 0) process.exit(result.status ?? 1);
-
-if (!serverOnly) {
-  const electronResult = spawnSync(process.execPath, [
-    require.resolve("./ensure-electron-runtime")
-  ], {
-    cwd: projectRoot,
-    env: process.env,
-    stdio: "inherit",
-    windowsHide: true
+    ELECTRON_MIRROR: environment.ELECTRON_MIRROR || "https://npmmirror.com/mirrors/electron/"
+  };
+  const result = runProjectNpm(args, {
+    root: projectRoot,
+    environment: installEnvironment,
+    spawn,
+    log
   });
 
-  if (electronResult.error) throw electronResult.error;
-  if (electronResult.status !== 0) process.exit(electronResult.status ?? 1);
+  if (result.error) throw result.error;
+  if (result.status !== 0) return result.status ?? 1;
 
-  const dependencyState = recordDependencyState();
-  console.log(`[dependencies] Recorded installed dependency state: ${dependencyState.stateFile}`);
+  if (!serverOnly) {
+    const electronResult = spawn(process.execPath, [
+      require.resolve("./ensure-electron-runtime")
+    ], {
+      cwd: projectRoot,
+      env: environment,
+      stdio: "inherit",
+      windowsHide: true
+    });
+
+    if (electronResult.error) throw electronResult.error;
+    if (electronResult.status !== 0) return electronResult.status ?? 1;
+
+    const dependencyState = recordState(projectRoot);
+    log(`[dependencies] Recorded installed dependency state: ${dependencyState.stateFile}`);
+  }
+
+  return 0;
 }
 
-process.exit(0);
-
-function quoteCommandArgument(value) {
-  return /^[A-Za-z0-9_@%+=:,./\\-]+$/.test(value)
-    ? value
-    : `"${String(value).replace(/"/g, '""')}"`;
+if (require.main === module) {
+  process.exitCode = main();
 }
+
+module.exports = { main };
