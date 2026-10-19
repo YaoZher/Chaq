@@ -58,6 +58,8 @@ function fixture() {
   const creations: unknown[] = [];
   const discoveries: Array<{ query: string; request: ReturnType<typeof deferred<PublicAgentSummary[]>> }> = [];
   let directoryFails = false;
+  let directoryDelayed = false;
+  const delayedDirectoryReads: Array<{ signal?: AbortSignal; request: ReturnType<typeof deferred<AgentDetail[]>> }> = [];
   let failingAgentId: string | null = null;
   const sends: string[] = [];
   const readReceipts: string[] = [];
@@ -68,8 +70,13 @@ function fixture() {
   const originalClearInterval = timerWindow.clearInterval;
   const originalFetch = window.fetch;
   const mocks = {
-    agents: async () => {
+    agents: async (signal?: AbortSignal) => {
       directoryReads.push(Date.now());
+      if (directoryDelayed) {
+        const request = deferred<AgentDetail[]>();
+        delayedDirectoryReads.push({ signal, request });
+        return request.promise;
+      }
       if (directoryFails) throw new Error("Directory unavailable");
       return [...agents.values()].map((agent) => structuredClone(agent));
     },
@@ -160,8 +167,12 @@ function fixture() {
   }
 
   return {
-    container, reads, notices, imports, field, fill, click, query, queryAll, sends, readReceipts, directoryReads, directoryConversations, directoryContacts, conversationMessages, discoveries, creations,
+    container, reads, notices, imports, field, fill, click, query, queryAll, sends, readReceipts, directoryReads, directoryConversations, directoryContacts, conversationMessages, discoveries, creations, delayedDirectoryReads,
     failDirectory: (failed: boolean) => { directoryFails = failed; },
+    delayDirectory: (delayed: boolean) => { directoryDelayed = delayed; },
+    finishDirectory: async (index: number, empty = false) => {
+      await act(async () => { delayedDirectoryReads[index].request.resolve(empty ? [] : [...agents.values()].map((agent) => structuredClone(agent))); });
+    },
     failAgent: (id: string | null) => { failingAgentId = id; },
     failCreate: async () => { await act(async () => { pendingCreate.reject(new Error("Creation interrupted")); }); },
     selected: () => query(".agent-directory-row.active strong")?.textContent,
@@ -228,6 +239,42 @@ function fixture() {
 
 type Fixture = ReturnType<typeof fixture>;
 const cases: Array<{ name: string; setup?(test: Fixture): void; waitUntilReady?: boolean; run(test: Fixture): Promise<void> }> = [
+  {
+    name: "slow initial directory requests survive polling and realtime refreshes until they finish",
+    setup(test) { test.delayDirectory(true); },
+    waitUntilReady: false,
+    async run(test) {
+      check(test.delayedDirectoryReads.length === 1, "initial directory request must be pending");
+      await test.tickPoll();
+      await test.tickPoll();
+      await act(async () => { window.dispatchEvent(new CustomEvent("chaq:realtime", { detail: { type: "conversation.message" } })); });
+      check(test.directoryReads.length === 1 && !test.delayedDirectoryReads[0].signal?.aborted, "refresh triggers must neither cancel nor duplicate a slow directory request");
+      await test.finishDirectory(0);
+      await waitFor(() => test.query(".agent-stage h2")?.textContent === "Agent A", "the original slow request must eventually load the directory and selected partner");
+      check(!test.query(".qq-directory-feedback"), "completed load must leave its loading state");
+      test.delayDirectory(false);
+      await test.tickPoll();
+      check(Number(test.directoryReads.length) === 2, "polling must resume after the slow request finishes");
+    }
+  },
+  {
+    name: "hiding a slow directory request releases it so returning can load again without stale results",
+    setup(test) { test.delayDirectory(true); },
+    waitUntilReady: false,
+    async run(test) {
+      await test.setActive(false);
+      check(test.delayedDirectoryReads[0].signal?.aborted, "hidden workspace must cancel its in-flight directory request");
+      await test.setActive(true);
+      check(test.delayedDirectoryReads.length === 2, "returning must start a replacement directory request immediately");
+      await test.finishDirectory(0, true);
+      await test.tickPoll();
+      check(test.directoryReads.length === 2 && !test.delayedDirectoryReads[1].signal?.aborted, "stale completion must not release or cancel the replacement request");
+      check(!test.query(".qq-directory-empty") && !test.query(".qq-welcome-kicker"), "stale empty results must not replace the loading state");
+      await test.finishDirectory(1);
+      await waitFor(() => test.query(".agent-stage h2")?.textContent === "Agent A", "returning must recover the directory from its replacement request");
+      check(!test.query(".qq-directory-feedback"), "successful recovery must clear loading feedback");
+    }
+  },
   {
     name: "initial directory failures show recovery instead of pretending the account has no partners",
     setup(test) { test.failDirectory(true); },

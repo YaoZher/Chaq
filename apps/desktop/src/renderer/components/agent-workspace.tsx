@@ -46,7 +46,7 @@ import type {
   SkillSummary
 } from "@chaq/shared";
 import { api, type LoginUser } from "../lib/api";
-import { LatestRequestGate, isSupersededRequest } from "../lib/latest-request";
+import { LatestRequestGate, isSupersededRequest, type LatestRequestToken } from "../lib/latest-request";
 import { PendingMessageKey } from "../lib/message-idempotency";
 import { useConversationMessages } from "../lib/use-conversation-messages";
 import { AgentProfileView } from "./agent-profile";
@@ -122,6 +122,7 @@ export function AgentWorkspace(props: {
   const selectionRequests = useRef(new LatestRequestGate());
   const pollRequests = useRef(new LatestRequestGate());
   const directoryRequests = useRef(new LatestRequestGate());
+  const pendingDirectory = useRef<LatestRequestToken | null>(null);
   const sendRequests = useRef(new LatestRequestGate());
   const selectedAgentIdRef = useRef<string | null>(null);
   const conversationIdRef = useRef<string | null>(null);
@@ -170,6 +171,7 @@ export function AgentWorkspace(props: {
       selectionRequests.current.cancel();
       pollRequests.current.cancel();
       directoryRequests.current.cancel();
+      pendingDirectory.current = null;
       sendRequests.current.cancel();
     };
   }, []);
@@ -190,6 +192,7 @@ export function AgentWorkspace(props: {
       clearInterval(timer);
       pollRequests.current.cancel();
       directoryRequests.current.cancel();
+      pendingDirectory.current = null;
     };
   }, [active]);
 
@@ -237,8 +240,11 @@ export function AgentWorkspace(props: {
   }
 
   async function refreshDirectory(): Promise<void> {
-    if (!activeRef.current) return;
+    // Slow requests must get a chance to finish before a polling or realtime
+    // refresh starts another one. Hiding the workspace releases this token.
+    if (!activeRef.current || pendingDirectory.current) return;
     const request = directoryRequests.current.begin("directory");
+    pendingDirectory.current = request;
     setDirectoryLoading(true);
     try {
       const [nextAgents, nextContacts, nextConversations] = await directoryRequests.current.guard(request, Promise.all([
@@ -255,7 +261,10 @@ export function AgentWorkspace(props: {
     } catch (error) {
       if (!isSupersededRequest(error) && directoryRequests.current.isCurrent(request)) setDirectoryError(messageOf(error));
     } finally {
-      if (directoryRequests.current.isCurrent(request)) setDirectoryLoading(false);
+      if (pendingDirectory.current === request) {
+        pendingDirectory.current = null;
+        if (directoryRequests.current.isCurrent(request)) setDirectoryLoading(false);
+      }
     }
   }
 
