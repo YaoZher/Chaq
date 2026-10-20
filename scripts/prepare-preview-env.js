@@ -2,6 +2,7 @@ const fs = require("node:fs");
 const { randomBytes } = require("node:crypto");
 const path = require("node:path");
 const { formatEnvValue, parseEnv } = require("./env-format");
+const { validAccountPassword } = require("./local-test-passwords");
 
 function previewProjectPaths(projectRoot = path.resolve(__dirname, "..")) {
   const chaqEnvironmentRoot = path.join(projectRoot, ".chaq-data");
@@ -29,9 +30,10 @@ function previewValues(existing = {}, createSecret = () => randomBytes(48).toStr
   const sessionSecret = validSecret(existing.SESSION_HASH_SECRET) && existing.SESSION_HASH_SECRET !== modelSecret
     ? existing.SESSION_HASH_SECRET
     : createSecret();
-  return {
+  const values = {
     NODE_ENV: "production",
     CHAQ_RUNTIME_PROFILE: "local-preview",
+    CHAQ_ALLOW_LOCAL_TEST_PASSWORDS: existing.CHAQ_ALLOW_LOCAL_TEST_PASSWORDS === "1" ? "1" : "0",
     CHAQ_MAIL_MODE: "log",
     DATABASE_URL: "postgresql://chaq:chaq@127.0.0.1:45432/chaq_preview?schema=public",
     REDIS_URL: "redis://127.0.0.1:46379/1",
@@ -57,14 +59,15 @@ function previewValues(existing = {}, createSecret = () => randomBytes(48).toStr
     MODEL_SECRET_KEY: modelSecret,
     SESSION_HASH_SECRET: sessionSecret,
     CHAQ_PREVIEW_USERNAME: validUsername(existing.CHAQ_PREVIEW_USERNAME) ? existing.CHAQ_PREVIEW_USERNAME : "preview",
-    CHAQ_PREVIEW_PASSWORD: validPreviewPassword(existing.CHAQ_PREVIEW_PASSWORD)
-      ? existing.CHAQ_PREVIEW_PASSWORD
-      : `Chaq-${createSecret().slice(0, 18)}9`,
     CHAQ_PREVIEW_DISPLAY_NAME: String(existing.CHAQ_PREVIEW_DISPLAY_NAME || "Chaq Preview").trim() || "Chaq Preview",
     CHAQ_PREVIEW_TOKEN_BALANCE: validBalance(existing.CHAQ_PREVIEW_TOKEN_BALANCE)
       ? String(existing.CHAQ_PREVIEW_TOKEN_BALANCE)
       : "1000000"
   };
+  values.CHAQ_PREVIEW_PASSWORD = validAccountPassword(existing.CHAQ_PREVIEW_PASSWORD, values)
+    ? existing.CHAQ_PREVIEW_PASSWORD
+    : `Chaq-${createSecret().slice(0, 18)}9`;
+  return values;
 }
 
 function validSecret(value) {
@@ -73,10 +76,6 @@ function validSecret(value) {
 
 function validUsername(value) {
   return typeof value === "string" && /^[A-Za-z0-9_-]{2,32}$/.test(value.trim());
-}
-
-function validPreviewPassword(value) {
-  return typeof value === "string" && /^(?=.*[A-Za-z])(?=.*\d).{8,64}$/.test(value);
 }
 
 function validBalance(value) {
@@ -110,7 +109,7 @@ function readPreviewLogin(filePath = previewEnv) {
     throw new Error(`Local preview environment does not exist yet: ${filePath}`);
   }
   const values = parseEnv(fs.readFileSync(filePath, "utf8"));
-  if (!validUsername(values.CHAQ_PREVIEW_USERNAME) || !validPreviewPassword(values.CHAQ_PREVIEW_PASSWORD)) {
+  if (!validUsername(values.CHAQ_PREVIEW_USERNAME) || !validAccountPassword(values.CHAQ_PREVIEW_PASSWORD, values)) {
     throw new Error(`Local preview login is missing or invalid in ${filePath}`);
   }
   return { filePath, values };

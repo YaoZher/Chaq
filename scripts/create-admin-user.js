@@ -3,6 +3,7 @@ const path = require("node:path");
 const { pbkdf2Sync, randomBytes } = require("node:crypto");
 const { PrismaClient } = require("@prisma/client");
 const { parseEnvEntries } = require("./env-format");
+const { allowsLocalTestPasswords, validAccountPassword } = require("./local-test-passwords");
 
 const root = path.resolve(__dirname, "..");
 const iterations = 120_000;
@@ -43,8 +44,11 @@ function normalizeEmail(email) {
   return String(email || "").trim().toLowerCase();
 }
 
-function assertPassword(password) {
-  if (!/^(?=.*[A-Za-z])(?=.*\d).{8,64}$/.test(password)) {
+function assertPassword(password, environment = process.env) {
+  if (!validAccountPassword(password, environment)) {
+    if (allowsLocalTestPasswords(environment)) {
+      throw new Error("CHAQ_ADMIN_PASSWORD must be 6-64 characters for the isolated local test profile.");
+    }
     throw new Error("CHAQ_ADMIN_PASSWORD must be 8-64 characters and include at least one letter and one number.");
   }
 }
@@ -144,4 +148,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { parseEnvFile };
+module.exports = { assertPassword, parseEnvFile };
