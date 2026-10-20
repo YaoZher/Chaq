@@ -203,6 +203,27 @@ const cases: Array<{ name: string; run(test: Fixture): Promise<void> }> = [
       await act(async () => pending.reject(new Error("Old post failed")));
       check(test.field("分享一点正在发生的事...").value === "Draft for B", "late mutation cannot modify a new profile draft");
       check(test.notices.length === 0 && test.profileReads.join(",") === "agent-a,agent-b", "old mutation must not notify or reload the new profile");
+      check(!test.container.querySelector(".chaq-modal-notice"), "a stale mutation must not leak feedback into the new profile");
+    }
+  },
+  {
+    name: "failed profile publishing shows dismissible modal feedback and retains the draft",
+    async run(test) {
+      test.setCreatePost(async () => { throw new Error("Post could not be saved"); });
+      await test.render();
+      await test.fill("分享一点正在发生的事...", "Keep my unfinished post");
+      await test.fill("心情", "Hopeful");
+      await test.click("发布");
+      const dialog = test.container.querySelector("dialog")!;
+      const feedback = dialog.querySelector<HTMLElement>(".chaq-modal-notice");
+      check(dialog.matches(":modal") && feedback?.textContent?.includes("Post could not be saved") && feedback.getClientRects().length, "publish errors must be visible within the native modal");
+      check(test.notices.join() === "Post could not be saved", "modal feedback must preserve the existing notice callback");
+      await test.click("关闭提示");
+      check(dialog.open && !dialog.querySelector(".chaq-modal-notice"), "dismissing an error must retain the open profile");
+      check(test.field("分享一点正在发生的事...").value === "Keep my unfinished post" && test.field("心情").value === "Hopeful", "failed publishing and notice dismissal must preserve every draft field");
+      await test.click("发布");
+      await test.render("agent-b");
+      check(!test.container.querySelector(".chaq-modal-notice"), "switching profiles must clear the previous profile's notice");
     }
   },
   {
@@ -218,6 +239,7 @@ const cases: Array<{ name: string; run(test: Fixture): Promise<void> }> = [
       await act(async () => pending.resolve({ id: "published", agentId: "agent-a", content: "Submitted post", mood: "", location: "", visibility: "public", mediaUrls: [], pinned: false, reactionCount: 0, commentCount: 0, likedByViewer: false, comments: [], createdAt: timestamp, updatedAt: timestamp }));
       check(test.field("分享一点正在发生的事...").value === "Next post draft" && test.field("心情").value === "New mood", "publishing must clear only the submitted values");
       check(test.notices.includes("动态已发布"), "successful publishing should acknowledge completion");
+      check(test.container.querySelector(".chaq-modal-notice")?.textContent?.includes("动态已发布"), "successful publishing must acknowledge completion inside the open modal");
     }
   },
   {

@@ -24,6 +24,53 @@ dialog.chaq-modal {
 dialog.chaq-modal:not([open]) { display: none !important; }
 dialog.chaq-modal::backdrop { background: transparent; }
 
+/* Feedback belongs to the same native top layer as its form. Keep it out of
+   the modal grid so it cannot shrink the page, chat pane, or fixed form footer. */
+.chaq-modal-notice {
+  position: absolute;
+  z-index: 10;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  box-sizing: border-box;
+  width: max-content;
+  max-width: min(520px, calc(100% - 128px));
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  color: var(--text);
+  box-shadow: var(--shadow-panel);
+  -webkit-app-region: no-drag;
+}
+
+.chaq-modal-notice > svg { flex-shrink: 0; margin-top: 5px; color: var(--accent); }
+.chaq-modal-notice > p {
+  min-width: 0;
+  max-height: min(160px, 30dvh);
+  margin: 3px 0;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.chaq-modal-notice > button {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+}
+
 @keyframes chaq-modal-enter {
   from { opacity: 0; }
   to { opacity: 1; }

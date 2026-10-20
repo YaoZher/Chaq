@@ -46,6 +46,7 @@ export function AgentProfileView(props: {
   const [tab, setTab] = useState<ProfileTab>("posts");
   const [loading, setLoading] = useState(true);
   const [profileError, setProfileError] = useState("");
+  const [notice, setNotice] = useState<{ agentId: string; message: string } | null>(null);
   const [posting, setPosting] = useState(false);
   const [postText, setPostText] = useState("");
   const [postMood, setPostMood] = useState("");
@@ -91,6 +92,7 @@ export function AgentProfileView(props: {
     pendingProfile.current = null;
     setProfile(null);
     setProfileError("");
+    setNotice(null);
     setTab("posts");
     setPostText("");
     setPostMood("");
@@ -158,6 +160,11 @@ export function AgentProfileView(props: {
     }
   }
 
+  function showNotice(message: string): void {
+    setNotice({ agentId: props.agentId, message });
+    props.onNotice(message);
+  }
+
   function resetChat(): void {
     closeChat();
     sendRequests.current.cancel();
@@ -186,7 +193,7 @@ export function AgentProfileView(props: {
       if (!profileSelections.current.isCurrent(selection)) return;
       if (image) setPostMedia((current) => [...current, image.dataUrl].slice(0, 4));
     } catch (error) {
-      if (profileSelections.current.isCurrent(selection)) props.onNotice(`无法读取动态图片：${messageOf(error)}`);
+      if (profileSelections.current.isCurrent(selection)) showNotice(`无法读取动态图片：${messageOf(error)}`);
     }
   }
 
@@ -209,9 +216,9 @@ export function AgentProfileView(props: {
       setPostLocation((current) => current === postLocation ? "" : current);
       setPostMedia((current) => current === postMedia ? [] : current);
       await loadProfile();
-      if (profileSelections.current.isCurrent(selection)) props.onNotice("动态已发布");
+      if (profileSelections.current.isCurrent(selection)) showNotice("动态已发布");
     } catch (error) {
-      if (profileSelections.current.isCurrent(selection)) props.onNotice(messageOf(error));
+      if (profileSelections.current.isCurrent(selection)) showNotice(messageOf(error));
     } finally {
       if (profileSelections.current.isCurrent(selection)) setPosting(false);
     }
@@ -224,7 +231,7 @@ export function AgentProfileView(props: {
       const next = await api.toggleAgentPostLike(post.id);
       if (profileSelections.current.isCurrent(selection)) replacePost(next);
     } catch (error) {
-      if (profileSelections.current.isCurrent(selection)) props.onNotice(messageOf(error));
+      if (profileSelections.current.isCurrent(selection)) showNotice(messageOf(error));
     }
   }
 
@@ -239,7 +246,7 @@ export function AgentProfileView(props: {
       replacePost(next);
       setCommentDrafts((current) => current[post.id]?.trim() === content ? { ...current, [post.id]: "" } : current);
     } catch (error) {
-      if (profileSelections.current.isCurrent(selection)) props.onNotice(messageOf(error));
+      if (profileSelections.current.isCurrent(selection)) showNotice(messageOf(error));
     }
   }
 
@@ -252,7 +259,7 @@ export function AgentProfileView(props: {
       if (!profileSelections.current.isCurrent(selection)) return;
       await loadProfile();
     } catch (error) {
-      if (profileSelections.current.isCurrent(selection)) props.onNotice(messageOf(error));
+      if (profileSelections.current.isCurrent(selection)) showNotice(messageOf(error));
     }
   }
 
@@ -272,7 +279,7 @@ export function AgentProfileView(props: {
       await loadProfile();
       if (profileSelections.current.isCurrent(selection)) props.onAgentChanged();
     } catch (error) {
-      if (profileSelections.current.isCurrent(selection)) props.onNotice(messageOf(error));
+      if (profileSelections.current.isCurrent(selection)) showNotice(messageOf(error));
     }
   }
 
@@ -287,14 +294,14 @@ export function AgentProfileView(props: {
       await loadProfile();
       if (profileSelections.current.isCurrent(selection)) props.onAgentChanged();
     } catch (error) {
-      if (profileSelections.current.isCurrent(selection)) props.onNotice(messageOf(error));
+      if (profileSelections.current.isCurrent(selection)) showNotice(messageOf(error));
     }
   }
 
   async function openChat(): Promise<void> {
     if (!profile) return;
     if (!profile.isOwner && !profile.isContact) {
-      props.onNotice("请先添加这个 Agent 为好友");
+      showNotice("请先添加这个 Agent 为好友");
       return;
     }
     await openChatFor(profile);
@@ -331,16 +338,16 @@ export function AgentProfileView(props: {
         await api.removeAgentContact(profile.agent.id);
         if (!profileSelections.current.isCurrent(selection)) return;
         resetChat();
-        props.onNotice(`已从联系人移除 ${profile.agent.name}`);
+        showNotice(`已从联系人移除 ${profile.agent.name}`);
       } else {
         await api.addAgentContact(profile.agent.id);
         if (!profileSelections.current.isCurrent(selection)) return;
-        props.onNotice(`已添加 ${profile.agent.name} 为好友`);
+        showNotice(`已添加 ${profile.agent.name} 为好友`);
       }
       await loadProfile();
       if (profileSelections.current.isCurrent(selection)) props.onAgentChanged();
     } catch (error) {
-      if (profileSelections.current.isCurrent(selection)) props.onNotice(messageOf(error));
+      if (profileSelections.current.isCurrent(selection)) showNotice(messageOf(error));
     }
   }
 
@@ -352,9 +359,9 @@ export function AgentProfileView(props: {
     if (!selection) return;
     try {
       await api.reportAgent(profile.agent.id, reason.trim());
-      if (profileSelections.current.isCurrent(selection)) props.onNotice("举报已提交，等待管理员审核。");
+      if (profileSelections.current.isCurrent(selection)) showNotice("举报已提交，等待管理员审核。");
     } catch (error) {
-      if (profileSelections.current.isCurrent(selection)) props.onNotice(messageOf(error));
+      if (profileSelections.current.isCurrent(selection)) showNotice(messageOf(error));
     }
   }
 
@@ -375,14 +382,15 @@ export function AgentProfileView(props: {
     } catch (error) {
       if (isSupersededRequest(error) || !messageResource.isCurrent(selection) || !sendRequests.current.isCurrent(request)) return;
       setChatComposer((current) => current.trim() ? current : content);
-      props.onNotice(messageOf(error));
+      showNotice(messageOf(error));
     } finally {
       if (messageResource.isCurrent(selection) && sendRequests.current.isCurrent(request)) setChatSending(false);
     }
   }
 
   if (!profile || profile.agent.id !== props.agentId) {
-    return <ModalDialog className="agent-profile-overlay" labelledBy={titleId} onClose={props.onClose}>
+    return <ModalDialog className="agent-profile-overlay" labelledBy={titleId} onClose={props.onClose}
+      notice={notice?.agentId === props.agentId ? notice.message : undefined} onDismissNotice={() => setNotice(null)}>
       <section className="agent-profile-loading" aria-busy={loading}>
         <Sparkles size={28} aria-hidden="true" />
         <h1 id={titleId}>{loading ? "正在打开主页" : "暂时无法打开主页"}</h1>
@@ -395,7 +403,8 @@ export function AgentProfileView(props: {
     </ModalDialog>;
   }
 
-  return <ModalDialog className="agent-profile-overlay" labelledBy={titleId} onClose={props.onClose}>
+  return <ModalDialog className="agent-profile-overlay" labelledBy={titleId} onClose={props.onClose}
+      notice={notice?.agentId === props.agentId ? notice.message : undefined} onDismissNotice={() => setNotice(null)}>
     <section className="agent-profile-page">
       <header className="agent-profile-cover" style={{ backgroundImage: `url(${displayCover})` }}>
         <button ref={backButton} className="agent-profile-back" title="关闭主页" onClick={props.onClose}><ArrowLeft size={18} /></button>

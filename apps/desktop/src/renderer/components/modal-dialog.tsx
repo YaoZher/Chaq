@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, type ReactNode } from "react";
+import { Info, X } from "lucide-react";
 import "./modal-dialog.css";
 
 type ModalDialogProps = {
@@ -8,10 +9,12 @@ type ModalDialogProps = {
   className?: string;
   dismissible?: boolean;
   active?: boolean;
+  notice?: string;
+  onDismissNotice?: () => void;
 };
 
 /** Native modality keeps retained pages and lower dialogs out of keyboard navigation. */
-export function ModalDialog({ children, labelledBy, onClose, className = "", dismissible = true, active = true }: ModalDialogProps) {
+export function ModalDialog({ children, labelledBy, onClose, className = "", dismissible = true, active = true, notice, onDismissNotice }: ModalDialogProps) {
   const element = useRef<HTMLDialogElement>(null);
   const backdropPointer = useRef<number | null>(null);
 
@@ -74,6 +77,11 @@ export function ModalDialog({ children, labelledBy, onClose, className = "", dis
       }}
       onPointerCancel={() => { backdropPointer.current = null; }}>
       {children}
+      {notice && <div className="chaq-modal-notice" role="status" aria-live="polite" aria-atomic="true">
+        <Info size={18} aria-hidden="true" />
+        <p>{notice}</p>
+        {onDismissNotice && <button type="button" aria-label="关闭提示" title="关闭提示" onClick={onDismissNotice}><X size={16} aria-hidden="true" /></button>}
+      </div>}
     </dialog>
   );
 }

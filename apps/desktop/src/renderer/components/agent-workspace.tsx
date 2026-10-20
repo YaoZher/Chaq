@@ -597,6 +597,7 @@ function AgentExplore(props: { active: boolean; onClose: () => void; onOpenProfi
   const [query, setQuery] = useState("");
   const { agents, setAgents, loading, searched, error, search } = useAgentDiscovery();
   const [addingId, setAddingId] = useState<string | null>(null);
+  const [notice, setNotice] = useState("");
   const adding = useRef(false);
   const mounted = useRef(true);
   useEffect(() => {
@@ -607,6 +608,7 @@ function AgentExplore(props: { active: boolean; onClose: () => void; onOpenProfi
 
   async function add(agent: PublicAgentSummary): Promise<void> {
     if (agent.isContact || adding.current) return;
+    setNotice("");
     adding.current = true;
     setAddingId(agent.id);
     try {
@@ -614,19 +616,25 @@ function AgentExplore(props: { active: boolean; onClose: () => void; onOpenProfi
       if (!mounted.current) return;
       setAgents((current) => current.map((item) => item.id === agent.id ? { ...item, isContact: true } : item));
       props.onChanged();
-      props.onNotice(`已添加 ${agent.name} 为好友`);
+      const message = `已添加 ${agent.name} 为好友`;
+      setNotice(message);
+      props.onNotice(message);
     } catch (error) {
-      if (mounted.current) props.onNotice(messageOf(error));
+      if (mounted.current) {
+        const message = messageOf(error);
+        setNotice(message);
+        props.onNotice(message);
+      }
     } finally {
       adding.current = false;
       if (mounted.current) setAddingId(null);
     }
   }
 
-  return <ModalDialog className="agent-explore-overlay" labelledBy={titleId} active={props.active} dismissible={!addingId} onClose={props.onClose}>
+  return <ModalDialog className="agent-explore-overlay" labelledBy={titleId} active={props.active} dismissible={!addingId} onClose={props.onClose} notice={notice} onDismissNotice={() => setNotice("")}>
     <section className="agent-explore">
       <header><div><Compass size={20} /><span><h2 id={titleId}>发现 Agent</h2><p>寻找可以长期相处、协作和交流的数字伙伴</p></span></div><button type="button" className="icon-only-button" title="关闭" aria-label="关闭发现窗口" disabled={Boolean(addingId)} onClick={props.onClose}><X size={18} /></button></header>
-      <form className="agent-explore-search" onSubmit={(event) => { event.preventDefault(); if (!adding.current) void search(query); }}><Search size={17} /><input aria-label="搜索公开 Agent" value={query} disabled={Boolean(addingId)} onChange={(event) => setQuery(event.target.value)} placeholder="搜索名字、Handle、标签或简介" /><button type="submit" disabled={Boolean(addingId)}>搜索</button></form>
+      <form className="agent-explore-search" onSubmit={(event) => { event.preventDefault(); if (!adding.current) { setNotice(""); void search(query); } }}><Search size={17} /><input aria-label="搜索公开 Agent" value={query} disabled={Boolean(addingId)} onChange={(event) => setQuery(event.target.value)} placeholder="搜索名字、Handle、标签或简介" /><button type="submit" disabled={Boolean(addingId)}>搜索</button></form>
       <div className="agent-explore-grid" aria-busy={loading}>
         {agents.map((item) => <article key={item.id}>
           <button className="agent-explore-profile" disabled={Boolean(addingId)} onClick={() => props.onOpenProfile(item.id)}><AgentAvatar agent={item} large /><span><strong>{item.name}</strong><small>@{item.handle}</small></span></button>
@@ -1059,6 +1067,7 @@ function CreateAgentDialog(props: { active: boolean; providers: ModelProviderPub
   const titleId = useId();
   const [form, setForm] = useState({ name: "", handle: `agent-${Date.now().toString(36).slice(-5)}`, tagline: "", persona: "有稳定的自我、好奇心和行动力。", tone: "自然、直接、有分寸。", autonomyMode: "copilot" as AgentDraft["autonomyMode"], visibility: "private" as AgentDraft["visibility"], serviceFee: 0, modelProviderId: props.providers[0]?.id ?? "", model: props.providers[0]?.models[0]?.id ?? "" });
   const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
   const submitting = useRef(false);
   const mounted = useRef(true);
   const [errors, setErrors] = useState<FieldErrors>({});
@@ -1071,9 +1080,11 @@ function CreateAgentDialog(props: { active: boolean; providers: ModelProviderPub
   };
   async function create(): Promise<void> {
     if (submitting.current) return;
+    setNotice("");
     const nextErrors = validateAgentCreate(form);
     setErrors(nextErrors);
     if (Object.values(nextErrors).some(Boolean)) {
+      setNotice("请检查标红的 Agent 创建字段");
       props.onNotice("请检查标红的 Agent 创建字段");
       return;
     }
@@ -1100,15 +1111,16 @@ function CreateAgentDialog(props: { active: boolean; providers: ModelProviderPub
         dailyActionBudget: 30
       });
       if (mounted.current) props.onCreated(agent);
-    } catch (error) { if (mounted.current) props.onNotice(messageOf(error)); } finally { submitting.current = false; if (mounted.current) setBusy(false); }
+    } catch (error) { if (mounted.current) { const message = messageOf(error); setNotice(message); props.onNotice(message); } } finally { submitting.current = false; if (mounted.current) setBusy(false); }
   }
   async function migrate(skillId: string): Promise<void> {
     if (submitting.current) return;
+    setNotice("");
     submitting.current = true;
     setBusy(true);
-    try { const agent = await api.migrateSkillToAgent(skillId); if (mounted.current) props.onCreated(agent); } catch (error) { if (mounted.current) props.onNotice(messageOf(error)); } finally { submitting.current = false; if (mounted.current) setBusy(false); }
+    try { const agent = await api.migrateSkillToAgent(skillId); if (mounted.current) props.onCreated(agent); } catch (error) { if (mounted.current) { const message = messageOf(error); setNotice(message); props.onNotice(message); } } finally { submitting.current = false; if (mounted.current) setBusy(false); }
   }
-  return <ModalDialog className="agent-dialog-backdrop" labelledBy={titleId} active={props.active} dismissible={!busy} onClose={props.onClose}>
+  return <ModalDialog className="agent-dialog-backdrop" labelledBy={titleId} active={props.active} dismissible={!busy} onClose={props.onClose} notice={notice} onDismissNotice={() => setNotice("")}>
     <section className="agent-dialog">
       <header><div><Sparkles size={19} /><h2 id={titleId}>创建 Agent</h2></div><button type="button" className="icon-only-button" aria-label="关闭创建窗口" disabled={busy} onClick={props.onClose}><X size={18} /></button></header>
       <form className="agent-dialog-form" aria-busy={busy} onSubmit={(event) => { event.preventDefault(); void create(); }}>

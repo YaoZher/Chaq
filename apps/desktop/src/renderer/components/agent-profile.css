@@ -6,6 +6,8 @@ dialog.chaq-modal.agent-profile-overlay {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
+.agent-profile-overlay > .chaq-modal-notice { top: 64px; }
+
 .agent-profile-overlay .agent-profile-loading {
   padding: 32px;
   text-align: center;

@@ -375,6 +375,7 @@ const cases: Array<{ name: string; setup?(test: Fixture): void; waitUntilReady?:
       check(dialog.open, "Escape and backdrop must not dismiss an in-flight creation");
       await test.failCreate();
       check(name.value === "My new partner" && dialog.open, "creation failure must preserve the entered name");
+      check(dialog.querySelector(".chaq-modal-notice")?.textContent?.includes("Creation interrupted"), "creation failure must be visible inside the native modal top layer");
       check(!test.query<HTMLButtonElement>('[aria-label="关闭创建窗口"]')?.disabled, "failure must restore dismissal");
       await test.click('[aria-label="关闭创建窗口"]', "");
     }

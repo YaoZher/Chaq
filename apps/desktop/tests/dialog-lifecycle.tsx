@@ -15,6 +15,7 @@ function fixture() {
   let setActive!: (active: boolean) => void;
   let setDismissible!: (dismissible: boolean) => void;
   let setMounted!: (mounted: boolean) => void;
+  let setNotice!: (notice: string) => void;
   let bubbledCancels = 0;
   const onCancel = () => { bubbledCancels += 1; };
   container.addEventListener("cancel", onCancel);
@@ -24,14 +25,17 @@ function fixture() {
     const [dismissible, updateDismissible] = useState(true);
     const [mounted, updateMounted] = useState(true);
     const [nested, setNested] = useState(false);
+    const [notice, updateNotice] = useState("");
     setActive = updateActive;
     setDismissible = updateDismissible;
     setMounted = updateMounted;
+    setNotice = updateNotice;
     return <>
       <button id="open-dialog" onClick={() => updateActive(true)}>Open dialog</button>
       <button id="outside-dialog">Background action</button>
       {mounted && <ModalDialog className="agent-dialog-backdrop" labelledBy="dialog-title" active={active}
-        dismissible={dismissible} onClose={() => { closes.push("outer"); updateActive(false); }}>
+        dismissible={dismissible} onClose={() => { closes.push("outer"); updateActive(false); }}
+        notice={notice} onDismissNotice={() => updateNotice("")}>
         <section className="agent-dialog">
           <h2 id="dialog-title">Create companion</h2>
           <input aria-label="Dialog draft" defaultValue="" />
@@ -78,6 +82,7 @@ function fixture() {
     mount: async () => { await act(async () => { root.render(<Harness />); }); },
     active: async (active: boolean) => { await act(async () => { setActive(active); }); },
     dismissible: async (dismissible: boolean) => { await act(async () => { setDismissible(dismissible); }); },
+    notice: async (notice: string) => { await act(async () => { setNotice(notice); }); },
     unmountDialog: async () => { await act(async () => { setMounted(false); }); },
     dispose: async () => {
       await act(async () => { root.unmount(); });
@@ -89,6 +94,30 @@ function fixture() {
 
 type Fixture = ReturnType<typeof fixture>;
 const cases: Array<{ name: string; run(test: Fixture): Promise<void> }> = [
+  {
+    name: "modal feedback stays in the top layer without shifting content or dismissing the draft",
+    async run(test) {
+      await test.click("#open-dialog");
+      const input = test.node<HTMLInputElement>('input[aria-label="Dialog draft"]');
+      input.value = "Keep this draft after an error";
+      input.focus();
+      const content = test.node(".agent-dialog");
+      const before = [content.offsetLeft, content.offsetTop, content.offsetWidth, content.offsetHeight];
+      await test.notice("Unable to save. Please retry.");
+      const feedback = test.node(".chaq-modal-notice");
+      check(test.outer().contains(feedback) && test.outer().matches(":modal"), "feedback must belong to the native top layer");
+      check(feedback.getAttribute("role") === "status" && feedback.getClientRects().length > 0, "feedback must be visible and announced");
+      const after = [content.offsetLeft, content.offsetTop, content.offsetWidth, content.offsetHeight];
+      check(before.every((value, index) => value === after[index]), "feedback must not consume modal layout space");
+      check(document.activeElement === input, "showing feedback must not interrupt draft focus");
+      await test.active(false);
+      check(!feedback.getClientRects().length, "feedback must hide with its retained modal");
+      await test.active(true);
+      await test.click('.chaq-modal-notice button[aria-label="关闭提示"]');
+      check(!test.outer().querySelector(".chaq-modal-notice") && test.outer().open, "dismissing feedback must keep the dialog open");
+      check(input.value === "Keep this draft after an error" && test.closes.length === 0, "dismissing feedback must preserve the draft");
+    }
+  },
   {
     name: "native dialogs isolate background controls and restore their opener on cancellation",
     async run(test) {
